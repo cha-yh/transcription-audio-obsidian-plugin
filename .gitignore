@@ -1,0 +1,12 @@
+node_modules
+# Local Env file
+.env.local
+
+# Local env file
+.env.local
+
+main.js
+
+.cursor
+
+.DS_Store

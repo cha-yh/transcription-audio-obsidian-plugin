@@ -1,0 +1,10 @@
+{
+  "id": "transcription-audio-plugin",
+  "name": "Transcription Audio Plugin",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Transcribe audio files into markdown notes",
+  "author": "cha-yh",
+  "authorUrl": "https://github.com/cha-yh",
+  "isDesktopOnly": false
+}
