@@ -9,13 +9,10 @@ import os from "os";
 const env = process.argv[2] || "production";
 const prod = env === "production";
 
-console.log(`Running in ${env} mode`);
-
 if (prod) {
   dotenv.config({ path: ".env.production" });
 } else {
   if (fs.existsSync(".env.local")) {
-    console.log("here?");
     dotenv.config({ path: ".env.local" });
   } else {
     dotenv.config({ path: ".env" });
@@ -32,11 +29,6 @@ const copy_to_plugins = {
   name: "copy_to_plugins",
   setup(build) {
     build.onEnd(() => {
-      console.log("process.env", process.env);
-      console.log(
-        "process.env.OBSIDIAN_PLUGINS_PATH",
-        process.env.OBSIDIAN_PLUGINS_PATH
-      );
       let obsidianPluginsPath = process.env.OBSIDIAN_PLUGINS_PATH;
 
       if (!obsidianPluginsPath) {
