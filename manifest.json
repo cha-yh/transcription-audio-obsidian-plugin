@@ -1,5 +1,5 @@
 {
-  "id": "transcription-audio-plugin",
+  "id": "transcription-audio",
   "name": "Transcription Audio Plugin",
   "version": "0.1.0",
   "minAppVersion": "0.15.0",

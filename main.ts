@@ -29,7 +29,7 @@ export default class TranscriptionAudioPlugin extends Plugin {
     );
 
     this.addCommand({
-      id: "transcription-audio-plugin-transcribe-audio",
+      id: "transcription-audio",
       name: "Transcribe audio",
       editorCallback: (editor: Editor, view: MarkdownView) => {
         this.commandGenerateTranscript(editor);

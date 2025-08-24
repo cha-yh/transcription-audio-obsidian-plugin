@@ -1,5 +1,5 @@
 {
-  "name": "transcription-audio-plugin",
+  "name": "transcription-audio",
   "version": "0.1.0",
   "description": "Transcribe audio files into markdown notes",
   "main": "main.js",
