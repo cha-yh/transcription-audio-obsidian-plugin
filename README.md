@@ -27,7 +27,7 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 
 ## Configuration
 
-Open Settings → Transcription Audio Plugin:
+Open Settings → Transcription Audio:
 
 - API Key: Your Google AI API key
 - Model: Select a Gemini-compatible model

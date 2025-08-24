@@ -1,6 +1,6 @@
 {
   "id": "transcription-audio",
-  "name": "Transcription Audio Plugin",
+  "name": "Transcription Audio",
   "version": "0.1.0",
   "minAppVersion": "0.15.0",
   "description": "Transcribe audio files into markdown notes",
