@@ -41,6 +41,10 @@ Open Settings → Transcription Audio:
 3. Run the command: “Transcribe audio”.
 4. Watch progress in the right sidebar panel. When complete, the transcription and notes are inserted at your starting cursor position.
 
+## Privacy & Data
+
+Audio content is sent to Google’s Gemini API for processing. The plugin does not store your audio or transcripts outside your vault. Keep your API key secure and review your organization’s data policies before use.
+
 ## License
 
 This project is licensed under the MIT License.

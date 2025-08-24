@@ -41,33 +41,47 @@ export class TranscriptionProgressView extends ItemView {
     const { containerEl } = this;
     containerEl.empty();
 
-    this.headerEl = containerEl.createEl("div", { cls: "smp-header" });
+    this.headerEl = containerEl.createEl("div", {
+      cls: "transcription-audio-header",
+    });
     this.headerEl.createEl("h3", { text: VIEW_TITLE });
 
-    const infoEl = containerEl.createEl("div", { cls: "smp-info" });
-    const row1 = infoEl.createEl("div", { cls: "smp-row" });
-    row1.createEl("span", { text: "File: ", cls: "smp-label" });
+    const infoEl = containerEl.createEl("div", {
+      cls: "transcription-audio-info",
+    });
+    const row1 = infoEl.createEl("div", { cls: "transcription-audio-row" });
+    row1.createEl("span", { text: "File: ", cls: "transcription-audio-label" });
     this.fileNameEl = row1.createEl("span", { text: "-" });
 
-    const row2 = infoEl.createEl("div", { cls: "smp-row" });
-    row2.createEl("span", { text: "Size: ", cls: "smp-label" });
+    const row2 = infoEl.createEl("div", { cls: "transcription-audio-row" });
+    row2.createEl("span", { text: "Size: ", cls: "transcription-audio-label" });
     this.fileSizeEl = row2.createEl("span", { text: "-" });
 
-    const row3 = infoEl.createEl("div", { cls: "smp-row" });
-    row3.createEl("span", { text: "Status: ", cls: "smp-label" });
+    const row3 = infoEl.createEl("div", { cls: "transcription-audio-row" });
+    row3.createEl("span", {
+      text: "Status: ",
+      cls: "transcription-audio-label",
+    });
     this.statusEl = row3.createEl("span", { text: "Idle" });
 
-    const row4 = infoEl.createEl("div", { cls: "smp-row" });
-    row4.createEl("span", { text: "Target: ", cls: "smp-label" });
+    const row4 = infoEl.createEl("div", { cls: "transcription-audio-row" });
+    row4.createEl("span", {
+      text: "Target: ",
+      cls: "transcription-audio-label",
+    });
     this.targetFileEl = row4.createEl("span", { text: "-" });
 
-    this.chunkWrapEl = containerEl.createEl("div", { cls: "smp-chunks" });
+    this.chunkWrapEl = containerEl.createEl("div", {
+      cls: "transcription-audio-chunks",
+    });
     this.chunkLabelEl = this.chunkWrapEl.createEl("div", { text: "Chunk: -" });
     this.chunkBarEl = this.chunkWrapEl.createEl("progress");
     this.chunkBarEl.max = 1;
     this.chunkBarEl.value = 0;
 
-    this.logEl = containerEl.createEl("div", { cls: "smp-log" });
+    this.logEl = containerEl.createEl("div", {
+      cls: "transcription-audio-log",
+    });
     this.logEl.createEl("div", { text: "Log start" });
 
     this.unsubscribe = progressBus.subscribe((e) => this.onProgress(e));

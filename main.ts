@@ -48,10 +48,7 @@ export default class TranscriptionAudioPlugin extends Plugin {
   }
 
   async commandGenerateTranscript(editor: Editor) {
-    const apiKey =
-      process.env.NODE_ENV === "development"
-        ? process.env.GOOGLE_API_KEY
-        : this.settings.apiKey;
+    const apiKey = this.settings.apiKey;
     await this.transcriptionController.run(
       editor,
       apiKey,
@@ -72,20 +69,18 @@ class TranscriptionSettingTab extends PluginSettingTab {
     let { containerEl } = this;
     containerEl.empty();
 
-    if (process.env.NODE_ENV !== "development") {
-      new Setting(containerEl)
-        .setName("API Key")
-        .setDesc("Your Google AI API key")
-        .addText((text) =>
-          text
-            .setPlaceholder("Enter your API key")
-            .setValue(this.plugin.settings.apiKey)
-            .onChange(async (value) => {
-              this.plugin.settings.apiKey = value;
-              await this.plugin.saveSettings();
-            })
-        );
-    }
+    new Setting(containerEl)
+      .setName("API Key")
+      .setDesc("Your Google AI API key")
+      .addText((text) =>
+        text
+          .setPlaceholder("Enter your API key")
+          .setValue(this.plugin.settings.apiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.apiKey = value;
+            await this.plugin.saveSettings();
+          })
+      );
 
     new Setting(containerEl)
       .setName("Model")
