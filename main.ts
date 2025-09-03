@@ -72,15 +72,17 @@ class TranscriptionSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("API Key")
       .setDesc("Your Google AI API key")
-      .addText((text) =>
+      .addText((text) => {
+        // mask input
+        text.inputEl.type = "password";
         text
           .setPlaceholder("Enter your API key")
           .setValue(this.plugin.settings.apiKey)
           .onChange(async (value) => {
             this.plugin.settings.apiKey = value;
             await this.plugin.saveSettings();
-          })
-      );
+          });
+      });
 
     new Setting(containerEl)
       .setName("Model")
