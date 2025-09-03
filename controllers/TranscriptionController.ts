@@ -148,13 +148,11 @@ export class TranscriptionController {
                   stage: "chunk-failed",
                   chunkIndex: index,
                   chunkTotal: chunks.length,
-                  message: (e as any)?.message || String(e),
+                  message: e?.message || String(e),
                 });
                 combined +=
                   preface +
-                  `[[Chunk ${index} failed: ${
-                    (e as any)?.message || String(e)
-                  }]]`;
+                  `[[Chunk ${index} failed: ${e?.message || String(e)}]]`;
               }
             }
             transcript = combined.trim();

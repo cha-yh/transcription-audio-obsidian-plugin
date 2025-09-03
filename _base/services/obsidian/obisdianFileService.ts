@@ -8,7 +8,9 @@ export class ObsidianFileService {
     let result: RegExpExecArray | null;
     for (const reg of regex) {
       while ((result = reg.exec(text)) !== null) {
-        filename = decodeURI(result[0]).trim();
+        // Use the first capturing group when available (compat with no-lookbehind patterns)
+        const captured = result[1] ?? result[0];
+        filename = decodeURI(captured).trim();
       }
     }
     if (filename === "") throw new Error("No file found in the text.");
