@@ -24,13 +24,14 @@ export class ObsidianInteractorService {
         editor.replaceRange(content, { line, ch });
       } else {
         // Read the file, insert at the position, then save the whole content
-        const data = await this.app.vault.read(file);
-        const lines = data.split("\n");
-        const targetLine = lines[line] ?? "";
-        const newLine =
-          targetLine.slice(0, ch) + content + targetLine.slice(ch);
-        lines[line] = newLine;
-        await this.app.vault.modify(file, lines.join("\n"));
+        await this.app.vault.process(file, (data) => {
+          const lines = data.split("\n");
+          const targetLine = lines[line] ?? "";
+          const newLine =
+            targetLine.slice(0, ch) + content + targetLine.slice(ch);
+          lines[line] = newLine;
+          return lines.join("\n");
+        });
       }
     } catch (error) {
       console.error("Failed to write transcript to target file:", error);
