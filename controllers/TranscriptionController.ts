@@ -1,9 +1,8 @@
-import { App, Editor, MarkdownView, Notice, TAbstractFile } from "obsidian";
+import { App, Editor, Notice, TFile } from "obsidian";
 import { ObsidianInteractorService } from "../_base/services/obsidian/ObsidianInteractorService";
 import { TranscriptionService } from "../_base/services/transcription/TranscriptionService";
 import { computeWavChunkRanges } from "../_base/services/transcription/chunking";
 import { progressBus } from "../_base/utils/progressBus";
-import type { ProgressEvent } from "../_base/types/progress";
 import { ObsidianFileService } from "_base/services/obsidian/obisdianFileService";
 import { VIEW_TYPE_PROGRESS } from "_base/constants/progress";
 import { AudioService } from "../_base/services/audio/AudioService";
@@ -74,11 +73,12 @@ export class TranscriptionController {
 
     try {
       progressBus.publish({ stage: "file-detected", fileName: filePath });
-      const isPathExists = await this.app.vault.adapter.exists(filePath);
-      if (!isPathExists) throw new Error(filePath + " does not exist");
+      const file = this.app.vault.getAbstractFileByPath(filePath);
+      if (file == null || !(file instanceof TFile))
+        throw new Error(filePath + " does not exist");
 
       try {
-        const audioBuffer = await this.app.vault.adapter.readBinary(filePath);
+        const audioBuffer = await this.app.vault.readBinary(file);
 
         this.writing = true;
 
