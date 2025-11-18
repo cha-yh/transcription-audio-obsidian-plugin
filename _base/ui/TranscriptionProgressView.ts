@@ -9,7 +9,6 @@ import type { ProgressEvent } from "../types/progress";
 import { formatBytes, formatDuration } from "../utils/format";
 
 export class TranscriptionProgressView extends ItemView {
-  private unsubscribe?: () => void;
   private headerEl!: HTMLElement;
   private fileNameEl!: HTMLElement;
   private fileSizeEl!: HTMLElement;
@@ -84,11 +83,7 @@ export class TranscriptionProgressView extends ItemView {
     });
     this.logEl.createEl("div", { text: "Log start" });
 
-    this.unsubscribe = progressBus.subscribe((e) => this.onProgress(e));
-  }
-
-  async onClose(): Promise<void> {
-    if (this.unsubscribe) this.unsubscribe();
+    this.registerEvent(progressBus.subscribe((e) => this.onProgress(e)));
   }
 
   private pushLog(text: string): void {
