@@ -28,5 +28,6 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "obsidian": "latest"
-  }
+  },
+  "packageManager": "yarn@4.2.2"
 }
