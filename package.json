@@ -26,7 +26,7 @@
     "typescript": "4.7.4"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "latest",
     "obsidian": "latest"
   },
   "packageManager": "yarn@4.2.2"

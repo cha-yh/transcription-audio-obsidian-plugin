@@ -24,7 +24,8 @@ export class TranscriptionController {
   async run(
     editor: Editor,
     apiKey: string | undefined,
-    prompt: string
+    prompt: string,
+    model: string
   ): Promise<void> {
     const currentCursorPosition = editor.getCursor();
     const activeFile = this.app.workspace.getActiveFile();
@@ -63,6 +64,11 @@ export class TranscriptionController {
     }
 
     await this.openProgressView();
+
+    progressBus.publish({
+      stage: "model-selected",
+      model: model,
+    });
 
     progressBus.publish({
       stage: "target-file-selected",
@@ -131,6 +137,7 @@ export class TranscriptionController {
                   chunkPrompt,
                   chunkBase64,
                   "audio/wav",
+                  model,
                   6 * 60 * 1000
                 );
                 progressBus.publish({
@@ -168,6 +175,7 @@ export class TranscriptionController {
               prompt,
               audioBase64,
               mimeType,
+              model,
               6 * 60 * 1000
             );
             progressBus.publish({

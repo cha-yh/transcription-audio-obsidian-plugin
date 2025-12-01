@@ -14,6 +14,7 @@ export class TranscriptionProgressView extends ItemView {
   private fileSizeEl!: HTMLElement;
   private statusEl!: HTMLElement;
   private targetFileEl!: HTMLElement;
+  private modelEl!: HTMLElement;
   private chunkWrapEl!: HTMLElement;
   private chunkBarEl!: HTMLProgressElement;
   private chunkLabelEl!: HTMLElement;
@@ -70,6 +71,13 @@ export class TranscriptionProgressView extends ItemView {
     });
     this.targetFileEl = row4.createEl("span", { text: "-" });
 
+    const row5 = infoEl.createEl("div", { cls: "transcription-audio-row" });
+    row5.createEl("span", {
+      text: "Model: ",
+      cls: "transcription-audio-label",
+    });
+    this.modelEl = row5.createEl("span", { text: "-" });
+
     this.chunkWrapEl = containerEl.createEl("div", {
       cls: "transcription-audio-chunks",
     });
@@ -93,6 +101,11 @@ export class TranscriptionProgressView extends ItemView {
 
   private onProgress(e: ProgressEvent): void {
     switch (e.stage) {
+      case "model-selected": {
+        this.modelEl.setText(e.model);
+        this.pushLog(`Model: ${e.model}`);
+        break;
+      }
       case "file-detected": {
         const name = e.fileName.split("/").pop() || e.fileName;
         this.fileNameEl.setText(name);

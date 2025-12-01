@@ -32,4 +32,8 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
     "The following is the transcribed audio:\n\n",
 };
 
-export const MODELS: string[] = ["gemini-2.5-flash", "gemini-2.5-pro"];
+export const MODELS: string[] = [
+  "gemini-2.5-flash",
+  "gemini-2.5-pro",
+  "gemini-3-pro-preview",
+];

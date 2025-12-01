@@ -1,4 +1,5 @@
 export type ProgressStage =
+  | "model-selected"
   | "file-detected"
   | "file-size"
   | "preparing-audio"
@@ -13,6 +14,7 @@ export type ProgressStage =
   | "error";
 
 export type ProgressEvent =
+  | { stage: "model-selected"; model: string }
   | { stage: "file-detected"; fileName: string }
   | { stage: "file-size"; sizeBytes: number }
   | { stage: "preparing-audio"; message?: string }

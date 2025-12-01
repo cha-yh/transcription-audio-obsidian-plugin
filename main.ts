@@ -52,7 +52,8 @@ export default class TranscriptionAudioPlugin extends Plugin {
     await this.transcriptionController.run(
       editor,
       apiKey,
-      this.settings.prompt
+      this.settings.prompt,
+      this.settings.model
     );
   }
 }
