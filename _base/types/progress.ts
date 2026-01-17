@@ -7,6 +7,8 @@ export type ProgressStage =
   | "chunk-start"
   | "chunk-complete"
   | "chunk-failed"
+  | "file-upload-start"
+  | "file-upload-complete"
   | "api-request-start"
   | "api-request-retry"
   | "api-request-complete"
@@ -27,6 +29,8 @@ export type ProgressEvent =
       chunkTotal: number;
       message: string;
     }
+  | { stage: "file-upload-start" }
+  | { stage: "file-upload-complete"; elapsedMs: number }
   | { stage: "api-request-start" }
   | { stage: "api-request-retry"; attempt: number; message?: string }
   | { stage: "api-request-complete"; elapsedMs: number }

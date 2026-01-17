@@ -128,22 +128,32 @@ export class TranscriptionController {
               try {
                 const chunkBase64 =
                   await this.audioService.arrayBufferToBase64Async(chunkBuffer);
-                const startAt = performance.now();
-                progressBus.publish({
-                  stage: "api-request-start",
-                });
                 const text = await this.transcriptionService.transcribe(
                   apiKey!,
                   chunkPrompt,
                   chunkBase64,
                   "audio/wav",
                   model,
-                  6 * 60 * 1000
+                  6 * 60 * 1000,
+                  () => {
+                    progressBus.publish({ stage: "file-upload-start" });
+                  },
+                  (uploadElapsedMs) => {
+                    progressBus.publish({
+                      stage: "file-upload-complete",
+                      elapsedMs: uploadElapsedMs,
+                    });
+                  },
+                  () => {
+                    progressBus.publish({ stage: "api-request-start" });
+                  },
+                  (apiRequestElapsedMs) => {
+                    progressBus.publish({
+                      stage: "api-request-complete",
+                      elapsedMs: apiRequestElapsedMs,
+                    });
+                  }
                 );
-                progressBus.publish({
-                  stage: "api-request-complete",
-                  elapsedMs: Math.round(performance.now() - startAt),
-                });
                 combined += preface + text.trim();
                 progressBus.publish({
                   stage: "chunk-complete",
@@ -166,22 +176,32 @@ export class TranscriptionController {
           } else {
             const audioBase64 =
               await this.audioService.arrayBufferToBase64Async(audioBuffer);
-            const startAt = performance.now();
-            progressBus.publish({
-              stage: "api-request-start",
-            });
             transcript = await this.transcriptionService.transcribe(
               apiKey!,
               prompt,
               audioBase64,
               mimeType,
               model,
-              6 * 60 * 1000
+              6 * 60 * 1000,
+              () => {
+                progressBus.publish({ stage: "file-upload-start" });
+              },
+              (uploadElapsedMs) => {
+                progressBus.publish({
+                  stage: "file-upload-complete",
+                  elapsedMs: uploadElapsedMs,
+                });
+              },
+              () => {
+                progressBus.publish({ stage: "api-request-start" });
+              },
+              (apiRequestElapsedMs) => {
+                progressBus.publish({
+                  stage: "api-request-complete",
+                  elapsedMs: apiRequestElapsedMs,
+                });
+              }
             );
-            progressBus.publish({
-              stage: "api-request-complete",
-              elapsedMs: Math.round(performance.now() - startAt),
-            });
           }
 
           await this.obsidianInteractor.appendTextToFile(
@@ -194,11 +214,7 @@ export class TranscriptionController {
           progressBus.publish({ stage: "success" });
         } catch (e) {
           console.error("[TranscriptionController] error", e);
-          new Notice(
-            `Transcription failed: ${
-              e instanceof Error ? e.message : String(e)
-            }`
-          );
+          new Notice("Transcription failed");
           progressBus.publish({
             stage: "error",
             message: e instanceof Error ? e.message : String(e),
@@ -209,12 +225,12 @@ export class TranscriptionController {
         }
       } catch (error) {
         console.error("[readBinary] error", error);
-        new Notice(error.message);
+        new Notice("Transcription failed");
         progressBus.publish({ stage: "error", message: error.message });
       }
     } catch (error) {
       console.warn(error.message);
-      new Notice(error.message);
+      new Notice("Transcription failed");
       progressBus.publish({ stage: "error", message: error.message });
     }
   }

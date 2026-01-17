@@ -13,7 +13,11 @@ export class TranscriptionService {
     audioBase64: string,
     mimeType: string,
     model: string,
-    timeoutMs: number = 6 * 60 * 1000
+    timeoutMs: number = 6 * 60 * 1000,
+    onFileUploadStart?: () => void,
+    onFileUploadComplete?: (elapsedMs: number) => void,
+    onApiRequestStart?: () => void,
+    onApiRequestComplete?: (elapsedMs: number) => void
   ): Promise<string> {
     if (!apiKey) {
       throw new Error("API Key is not provided.");
@@ -22,13 +26,15 @@ export class TranscriptionService {
     try {
       const ai = new GoogleGenAI({ apiKey });
 
-      // base64를 Buffer로 변환한 후 Blob으로 변환
+      // convert base64 to Buffer and then to Blob
       const audioBuffer = Buffer.from(audioBase64, "base64");
       const audioBlob = new Blob([audioBuffer], {
         type: mimeType || "application/octet-stream",
       });
 
-      // 파일 업로드
+      // upload file to Google Gen AI
+      const uploadStartAt = performance.now();
+      onFileUploadStart?.();
       const uploadedFile = await Promise.race([
         (async () => {
           return await ai.files.upload({
@@ -43,6 +49,8 @@ export class TranscriptionService {
           }, timeoutMs);
         }),
       ]);
+      const uploadElapsedMs = Math.round(performance.now() - uploadStartAt);
+      onFileUploadComplete?.(uploadElapsedMs);
 
       if (!uploadedFile.uri) {
         throw new Error("File upload failed: URI not returned");
@@ -52,7 +60,11 @@ export class TranscriptionService {
         throw new Error("File upload failed: MIME type not returned");
       }
 
-      // 컨텐츠 생성 및 응답 받기
+      // API request start - measure API request time separately
+      onApiRequestStart?.();
+      const apiRequestStartAt = performance.now();
+
+      // create content and receive response
       const text = await Promise.race([
         (async () => {
           const response = await ai.models.generateContent({
@@ -74,6 +86,11 @@ export class TranscriptionService {
           }, timeoutMs);
         }),
       ]);
+
+      const apiRequestElapsedMs = Math.round(
+        performance.now() - apiRequestStartAt
+      );
+      onApiRequestComplete?.(apiRequestElapsedMs);
 
       return text;
     } catch (error) {
