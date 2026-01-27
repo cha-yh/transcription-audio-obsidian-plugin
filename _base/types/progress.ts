@@ -4,6 +4,7 @@ export type ProgressStage =
   | "file-size"
   | "preparing-audio"
   | "target-file-selected"
+  | "context-notes-extracted"
   | "chunk-start"
   | "chunk-complete"
   | "chunk-failed"
@@ -21,6 +22,7 @@ export type ProgressEvent =
   | { stage: "file-size"; sizeBytes: number }
   | { stage: "preparing-audio"; message?: string }
   | { stage: "target-file-selected"; path: string; line: number; ch: number }
+  | { stage: "context-notes-extracted"; length: number; truncated: boolean }
   | { stage: "chunk-start"; chunkIndex: number; chunkTotal: number }
   | { stage: "chunk-complete"; chunkIndex: number; chunkTotal: number }
   | {

@@ -321,6 +321,18 @@ export class TranscriptionProgressView extends ItemView {
         this.pushLog("Preparing audio", "Preparing audio", this.currentSession);
         break;
       }
+      case "context-notes-extracted": {
+        if (!this.currentSession) {
+          break;
+        }
+        const truncatedText = e.truncated ? " (truncated)" : "";
+        this.pushLog(
+          `Context notes: ${e.length} chars${truncatedText}`,
+          `Context notes extracted: ${e.length} characters${truncatedText}`,
+          this.currentSession
+        );
+        break;
+      }
       case "chunk-start": {
         if (!this.currentSession) {
           break;

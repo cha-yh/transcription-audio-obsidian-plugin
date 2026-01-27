@@ -7,6 +7,8 @@ import { ObsidianFileService } from "_base/services/obsidian/obisdianFileService
 import { VIEW_TYPE_PROGRESS } from "_base/constants/progress";
 import { AudioService } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
+import { ContextNotesService } from "../_base/services/context/ContextNotesService";
+import { PromptBuilderService } from "../_base/services/prompt/PromptBuilderService";
 
 export class TranscriptionController {
   private writing: boolean = false;
@@ -18,6 +20,9 @@ export class TranscriptionController {
   private transcriptionService: TranscriptionService =
     new TranscriptionService();
   private audioService: AudioService = new AudioService();
+  private contextNotesService: ContextNotesService = new ContextNotesService();
+  private promptBuilderService: PromptBuilderService =
+    new PromptBuilderService();
 
   constructor(private app: App) {}
 
@@ -25,7 +30,9 @@ export class TranscriptionController {
     editor: Editor,
     apiKey: string | undefined,
     prompt: string,
-    model: string
+    model: string,
+    includeContextualNotes: boolean = false,
+    contextNotesMaxLength: number = 5000
   ): Promise<void> {
     const currentCursorPosition = editor.getCursor();
     const activeFile = this.app.workspace.getActiveFile();
@@ -61,6 +68,35 @@ export class TranscriptionController {
       new Notice(
         "API Key is not configured. Please set it in the plugin settings."
       );
+    }
+
+    // Extract contextual notes if enabled
+    let enhancedPrompt = prompt;
+    if (includeContextualNotes) {
+      const fullText = editor.getValue();
+      const contextResult = this.contextNotesService.extractContextNotes(
+        fullText,
+        filePath,
+        contextNotesMaxLength
+      );
+
+      if (contextResult) {
+        enhancedPrompt = this.promptBuilderService.buildPrompt(
+          prompt,
+          contextResult.notes
+        );
+        progressBus.publish({
+          stage: "context-notes-extracted",
+          length: contextResult.notes.length,
+          truncated: contextResult.wasTruncated,
+        });
+        console.debug(
+          "[TranscriptionController] Context notes extracted:",
+          contextResult.notes.length,
+          "chars, truncated:",
+          contextResult.wasTruncated
+        );
+      }
     }
 
     await this.openProgressView();
@@ -178,7 +214,7 @@ export class TranscriptionController {
               await this.audioService.arrayBufferToBase64Async(audioBuffer);
             transcript = await this.transcriptionService.transcribe(
               apiKey!,
-              prompt,
+              enhancedPrompt,
               audioBase64,
               mimeType,
               model,

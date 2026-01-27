@@ -53,7 +53,9 @@ export default class TranscriptionAudioPlugin extends Plugin {
       editor,
       apiKey,
       this.settings.prompt,
-      this.settings.model
+      this.settings.model,
+      this.settings.includeContextualNotes,
+      this.settings.contextNotesMaxLength
     );
   }
 }
@@ -117,6 +119,38 @@ class TranscriptionSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.prompt = value;
             await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Include contextual notes")
+      .setDesc(
+        "Extract notes written after the audio file and include them in the prompt to help identify speakers, topics, and terminology"
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.includeContextualNotes)
+          .onChange(async (value) => {
+            this.plugin.settings.includeContextualNotes = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Max context notes length")
+      .setDesc(
+        "Maximum number of characters to extract from contextual notes (default: 5000)"
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("5000")
+          .setValue(String(this.plugin.settings.contextNotesMaxLength))
+          .onChange(async (value) => {
+            const num = parseInt(value, 10);
+            if (!isNaN(num) && num > 0) {
+              this.plugin.settings.contextNotesMaxLength = num;
+              await this.plugin.saveSettings();
+            }
           });
       });
   }

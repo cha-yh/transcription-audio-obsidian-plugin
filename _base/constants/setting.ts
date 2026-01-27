@@ -18,18 +18,20 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
     "   - You must write down all detailed contents. Record who said what and the subsequent responses. Must be written as a bullet list.\n" +
     "   - e.g., 'Female 1: Who ate this hamburger?', 'Male 2: I saw Jaeyeon eating it.'\n" +
     "- Key Insights & Rationale\n" +
-    "   - Non-obvious insights with brief “why it matters”.\n" +
+    "   - Non-obvious insights with brief 'why it matters'.\n" +
     "- Decisions\n" +
     "   - Finalized decisions as a bullet list.\n" +
     "- One-paragraph Abstract\n" +
     "   - A tight 3–5 sentence abstract suitable for future review.\n" +
     "\n" +
     "Constraints:\n" +
-    "- Write as if I am the author. Do not mention “the speaker”.\n" +
+    "- Write as if I am the author. Do not mention 'the speaker'.\n" +
     "- Be faithful to the transcript; mark uncertain items with [?] rather than inventing facts.\n" +
     "- Prefer clear headings, bullets, and short paragraphs.\n" +
     "\n" +
-    "The following is the transcribed audio:\n\n"
+    "The following is the transcribed audio:\n\n",
+  includeContextualNotes: true,
+  contextNotesMaxLength: 5000,
 };
 
 export const MODELS: string[] = [
