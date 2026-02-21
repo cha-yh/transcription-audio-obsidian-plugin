@@ -30,7 +30,7 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
     "- Be faithful to the transcript; mark uncertain items with [?] rather than inventing facts.\n" +
     "- Prefer clear headings, bullets, and short paragraphs.\n" +
     "\n" +
-    "The following is the transcribed audio:\n\n"
+    "The following is the transcribed audio:\n\n",
 };
 
 export const MODELS: string[] = [

@@ -43,9 +43,9 @@ Open Settings → Transcription Audio:
    - Wiki link: `![[example_audio.wav]]`
 2. Place the cursor after the link.
 3. Run the command: "Transcribe audio".
-<img alt="Image" src="https://github.com/user-attachments/assets/254e3621-4733-4961-ab90-ce58792d6cc6" />
+   <img alt="Image" src="https://github.com/user-attachments/assets/254e3621-4733-4961-ab90-ce58792d6cc6" />
 4. A progress panel will automatically open in the right sidebar, showing real-time status updates including file upload progress, API request status, and transcription progress.
-<img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
+   <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
 5. When complete, the transcription and notes are inserted at your starting cursor position.
 
 ## Privacy & Data
@@ -55,6 +55,7 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 ## Changelog
 
 ### Version 0.4.0
+
 - **SecretStorage API key support**
   - Added Obsidian SecretStorage-based API key selection (recommended)
   - Kept legacy plain-text API key as fallback for backward compatibility
@@ -70,6 +71,7 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
   - Added token usage logs (prompt/output/total and related token fields) in progress detail
 
 ### Version 0.3.0
+
 - **Add gemini-3-flash-preview(default) model to settings**
 - **Enhanced Progress Tracking**: Improved transcription process with detailed progress tracking and UI updates
   - Enhanced progress panel with more detailed status information

@@ -8,6 +8,29 @@ import os from "os";
 
 const env = process.argv[2] || "production";
 const prod = env === "production";
+const useTestManifest = process.argv.includes("--test-manifest");
+
+function readManifest() {
+  const manifestPath = path.join(process.cwd(), "manifest.json");
+  return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+}
+
+function buildTargetManifest(sourceManifest) {
+  const idSuffix = useTestManifest
+    ? process.env.OBSIDIAN_TEST_ID_SUFFIX || "-test"
+    : process.env.OBSIDIAN_TEST_ID_SUFFIX || "";
+  const nameSuffix = useTestManifest
+    ? process.env.OBSIDIAN_TEST_NAME_SUFFIX || " TEST"
+    : process.env.OBSIDIAN_TEST_NAME_SUFFIX || "";
+
+  const targetManifest = {
+    ...sourceManifest,
+    id: `${sourceManifest.id}${idSuffix}`,
+    name: `${sourceManifest.name}${nameSuffix}`,
+  };
+
+  return targetManifest;
+}
 
 if (prod) {
   dotenv.config({ path: ".env.production" });
@@ -45,22 +68,28 @@ const copy_to_plugins = {
         );
       }
 
-      const plugin_path = path.join(obsidianPluginsPath, "recorder");
+      const sourceManifest = readManifest();
+      const targetManifest = buildTargetManifest(sourceManifest);
+      const pluginDirName =
+        process.env.OBSIDIAN_PLUGIN_DIR || targetManifest.id;
+      const plugin_path = path.join(obsidianPluginsPath, pluginDirName);
 
       if (!fs.existsSync(plugin_path)) {
         fs.mkdirSync(plugin_path, { recursive: true });
       }
 
       fs.copyFileSync("./main.js", path.join(plugin_path, "main.js"));
-      fs.copyFileSync(
-        "./manifest.json",
-        path.join(plugin_path, "manifest.json")
+      fs.writeFileSync(
+        path.join(plugin_path, "manifest.json"),
+        `${JSON.stringify(targetManifest, null, "\t")}\n`
       );
       fs.copyFileSync("./styles.css", path.join(plugin_path, "styles.css"));
       // add empty .hotreload file
       fs.writeFileSync(path.join(plugin_path, ".hotreload"), "");
 
-      console.log("Plugin built and copied to obsidian plugins folder");
+      console.log(
+        `Plugin built and copied to ${plugin_path} (manifest id: ${targetManifest.id})`
+      );
     });
   },
 };
