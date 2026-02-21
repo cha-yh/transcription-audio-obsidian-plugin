@@ -54,6 +54,21 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 
 ## Changelog
 
+### Version 0.4.0
+- **SecretStorage API key support**
+  - Added Obsidian SecretStorage-based API key selection (recommended)
+  - Kept legacy plain-text API key as fallback for backward compatibility
+- **Cancelable transcription flow**
+  - Added cancel control in the progress panel
+  - Improved cancellation handling for upload/request steps
+- **Progress panel navigation improvements**
+  - File and Target entries are clickable links
+  - Target navigation moves to the exact line/character position
+- **Progress log improvements**
+  - Added localized timestamp to the initial `Log start` line
+- **Gemini usage visibility**
+  - Added token usage logs (prompt/output/total and related token fields) in progress detail
+
 ### Version 0.3.0
 - **Add gemini-3-flash-preview(default) model to settings**
 - **Enhanced Progress Tracking**: Improved transcription process with detailed progress tracking and UI updates
