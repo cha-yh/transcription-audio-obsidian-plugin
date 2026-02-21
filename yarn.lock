@@ -1051,16 +1051,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"obsidian@npm:latest":
-  version: 1.10.3
-  resolution: "obsidian@npm:1.10.3"
+"obsidian@npm:^1.12.2":
+  version: 1.12.2
+  resolution: "obsidian@npm:1.12.2"
   dependencies:
     "@types/codemirror": "npm:5.60.8"
     moment: "npm:2.29.4"
   peerDependencies:
     "@codemirror/state": 6.5.0
     "@codemirror/view": 6.38.6
-  checksum: 10c0/05cd7718e3498f87e07d1c56b67ab8a6001ae0ac2c4ed40bac69dd4690ec7c1dcef623a8adb1b5a5bab039de905dcd50c91197ba73895110c7678ffbd70d217b
+  checksum: 10c0/e870ead0abaa784bca956f72f364e864f42902049713ebc0c3c03809cfd3929b2ff9f65f84ca9d827e8aea88801becc77c06c1de32951934c95b6c0ce316df54
   languageName: node
   linkType: hard
 
@@ -1249,7 +1249,7 @@ __metadata:
     builtin-modules: "npm:3.3.0"
     dotenv: "npm:^16.4.5"
     esbuild: "npm:0.17.3"
-    obsidian: "npm:latest"
+    obsidian: "npm:^1.12.2"
     tslib: "npm:2.4.0"
     typescript: "npm:4.7.4"
   languageName: unknown

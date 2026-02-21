@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@google/genai": "latest",
-    "obsidian": "latest"
+    "obsidian": "^1.12.2"
   },
   "packageManager": "yarn@4.2.2"
 }
