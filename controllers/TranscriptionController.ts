@@ -1,6 +1,7 @@
 import { App, Editor, Notice, TFile } from "obsidian";
 import { ObsidianInteractorService } from "../_base/services/obsidian/ObsidianInteractorService";
 import {
+  TranscriptionResult,
   TranscriptionCancelledError,
   TranscriptionService,
   isTranscriptionCancelledError,
@@ -82,6 +83,17 @@ export class TranscriptionController {
       }
     };
 
+    const publishUsage = (result: TranscriptionResult) => {
+      progressBus.publish({
+        stage: "api-usage",
+        promptTokenCount: result.usage.promptTokenCount,
+        candidatesTokenCount: result.usage.candidatesTokenCount,
+        thoughtsTokenCount: result.usage.thoughtsTokenCount,
+        toolUsePromptTokenCount: result.usage.toolUsePromptTokenCount,
+        totalTokenCount: result.usage.totalTokenCount,
+      });
+    };
+
     try {
       await this.openProgressView();
 
@@ -153,7 +165,7 @@ export class TranscriptionController {
               try {
                 const chunkBase64 =
                   await this.audioService.arrayBufferToBase64Async(chunkBuffer);
-                const text = await this.transcriptionService.transcribe(
+                const result = await this.transcriptionService.transcribe(
                   apiKey!,
                   chunkPrompt,
                   chunkBase64,
@@ -180,6 +192,10 @@ export class TranscriptionController {
                   },
                   abortController.signal
                 );
+
+                publishUsage(result);
+
+                const text = result.text;
 
                 throwIfCancelled();
 
@@ -209,7 +225,7 @@ export class TranscriptionController {
           } else {
             const audioBase64 =
               await this.audioService.arrayBufferToBase64Async(audioBuffer);
-            transcript = await this.transcriptionService.transcribe(
+            const result = await this.transcriptionService.transcribe(
               apiKey!,
               prompt,
               audioBase64,
@@ -236,6 +252,9 @@ export class TranscriptionController {
               },
               abortController.signal
             );
+
+            publishUsage(result);
+            transcript = result.text;
 
             throwIfCancelled();
           }

@@ -8,6 +8,19 @@ const RESUMABLE_UPLOAD_ENDPOINT =
   "https://generativelanguage.googleapis.com/upload/v1beta/files";
 const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
 
+export interface TranscriptionUsage {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  thoughtsTokenCount?: number;
+  toolUsePromptTokenCount?: number;
+  totalTokenCount?: number;
+}
+
+export interface TranscriptionResult {
+  text: string;
+  usage: TranscriptionUsage;
+}
+
 export class TranscriptionCancelledError extends Error {
   constructor() {
     super("Transcription was cancelled by user.");
@@ -247,7 +260,7 @@ export class TranscriptionService {
     onApiRequestStart?: () => void,
     onApiRequestComplete?: (elapsedMs: number) => void,
     abortSignal?: AbortSignal
-  ): Promise<string> {
+  ): Promise<TranscriptionResult> {
     if (!apiKey) {
       throw new Error("API Key is not provided.");
     }
@@ -309,12 +322,24 @@ export class TranscriptionService {
 
       const text = response.text;
 
+      const usage = response.usageMetadata;
+      const usageInfo: TranscriptionUsage = {
+        promptTokenCount: usage?.promptTokenCount,
+        candidatesTokenCount: usage?.candidatesTokenCount,
+        thoughtsTokenCount: usage?.thoughtsTokenCount,
+        toolUsePromptTokenCount: usage?.toolUsePromptTokenCount,
+        totalTokenCount: usage?.totalTokenCount,
+      };
+
       const apiRequestElapsedMs = Math.round(
         performance.now() - apiRequestStartAt
       );
       onApiRequestComplete?.(apiRequestElapsedMs);
 
-      return text;
+      return {
+        text,
+        usage: usageInfo,
+      };
     } catch (error) {
       if (!isTranscriptionCancelledError(error)) {
         console.error("Transcription failed:", error);

@@ -12,6 +12,7 @@ export type ProgressStage =
   | "api-request-start"
   | "api-request-retry"
   | "api-request-complete"
+  | "api-usage"
   | "cancel-requested"
   | "cancelled"
   | "success"
@@ -36,6 +37,14 @@ export type ProgressEvent =
   | { stage: "api-request-start" }
   | { stage: "api-request-retry"; attempt: number; message?: string }
   | { stage: "api-request-complete"; elapsedMs: number }
+  | {
+      stage: "api-usage";
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      thoughtsTokenCount?: number;
+      toolUsePromptTokenCount?: number;
+      totalTokenCount?: number;
+    }
   | { stage: "cancel-requested" }
   | { stage: "cancelled" }
   | { stage: "success" }

@@ -65,11 +65,23 @@ export class TranscriptionProgressView extends ItemView {
       return;
     }
 
+    const existingLeaf = this.app.workspace
+      .getLeavesOfType("markdown")
+      .find((leaf) => {
+        const view = leaf.view;
+        return view instanceof MarkdownView && view.file?.path === session.targetPath;
+      });
+
     const leaf =
+      existingLeaf ??
       this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit) ??
       this.app.workspace.getLeavesOfType("markdown")[0] ??
       this.app.workspace.getLeaf(false);
-    await leaf.openFile(abstractFile, { active: true });
+
+    if (!existingLeaf) {
+      await leaf.openFile(abstractFile, { active: true });
+    }
+
     this.app.workspace.setActiveLeaf(leaf, { focus: true });
     this.app.workspace.revealLeaf(leaf);
 
@@ -587,6 +599,38 @@ export class TranscriptionProgressView extends ItemView {
           `API done: ${durationText}`,
           this.currentSession
         );
+        break;
+      }
+      case "api-usage": {
+        if (!this.currentSession) {
+          break;
+        }
+
+        const usageParts: string[] = [];
+        if (typeof e.promptTokenCount === "number") {
+          usageParts.push(`prompt ${e.promptTokenCount}`);
+        }
+        if (typeof e.candidatesTokenCount === "number") {
+          usageParts.push(`output ${e.candidatesTokenCount}`);
+        }
+        if (typeof e.thoughtsTokenCount === "number") {
+          usageParts.push(`thoughts ${e.thoughtsTokenCount}`);
+        }
+        if (typeof e.toolUsePromptTokenCount === "number") {
+          usageParts.push(`tool ${e.toolUsePromptTokenCount}`);
+        }
+        if (typeof e.totalTokenCount === "number") {
+          usageParts.push(`total ${e.totalTokenCount}`);
+        }
+
+        if (usageParts.length > 0) {
+          this.pushLog(
+            "Usage recorded",
+            `Usage: ${usageParts.join(", ")} tokens`,
+            this.currentSession
+          );
+        }
+
         break;
       }
       case "cancel-requested": {
