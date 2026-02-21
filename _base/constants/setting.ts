@@ -3,6 +3,7 @@ import { AudioPluginSettings } from "_base/types/setting";
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
   model: "gemini-3-flash-preview",
   apiKey: "",
+  secretApiKeyName: "",
   prompt:
     "You are an expert meeting and research note-taker for Obsidian. Produce a rigorously structured Markdown note from the following audio transcript. Follow this exact structure and rules:\n" +
     "\n" +

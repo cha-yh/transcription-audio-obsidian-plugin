@@ -2,8 +2,10 @@ import {
   App,
   Editor,
   MarkdownView,
+  Notice,
   Plugin,
   PluginSettingTab,
+  SecretComponent,
   Setting,
 } from "obsidian";
 import { TranscriptionController } from "./controllers/TranscriptionController";
@@ -11,6 +13,17 @@ import { VIEW_TYPE_PROGRESS } from "./_base/constants/progress";
 import { TranscriptionProgressView } from "./_base/ui/TranscriptionProgressView";
 import { AudioPluginSettings } from "_base/types/setting";
 import { DEFAULT_SETTINGS, MODELS } from "_base/constants/setting";
+
+const SECRET_STORAGE_VERSION_MESSAGE =
+  "SecretStorage requires Obsidian 1.11.4+. Please update Obsidian to use this field.";
+
+function canUseSecretStorage(app: App): boolean {
+  return typeof app.secretStorage?.getSecret === "function";
+}
+
+function canUseSecretComponent(app: App): boolean {
+  return typeof SecretComponent === "function" && canUseSecretStorage(app);
+}
 
 export default class TranscriptionAudioPlugin extends Plugin {
   settings: AudioPluginSettings;
@@ -48,7 +61,19 @@ export default class TranscriptionAudioPlugin extends Plugin {
   }
 
   async commandGenerateTranscript(editor: Editor) {
-    const apiKey = this.settings.apiKey;
+    const secretApiKey =
+      this.settings.secretApiKeyName && canUseSecretStorage(this.app)
+        ? this.app.secretStorage?.getSecret(this.settings.secretApiKeyName) ??
+          null
+        : null;
+    const apiKey = secretApiKey || this.settings.apiKey;
+
+    if (!canUseSecretStorage(this.app) && this.settings.secretApiKeyName) {
+      new Notice(
+        `${SECRET_STORAGE_VERSION_MESSAGE} Falling back to deprecated API key.`
+      );
+    }
+
     await this.transcriptionController.run(
       editor,
       apiKey,
@@ -70,9 +95,32 @@ class TranscriptionSettingTab extends PluginSettingTab {
     let { containerEl } = this;
     containerEl.empty();
 
+    if (canUseSecretComponent(this.app)) {
+      const secretSetting = new Setting(containerEl)
+        .setName("API key (SecretStorage, recommended)")
+        .setDesc("Select a secret key name from Obsidian SecretStorage");
+
+      new SecretComponent(this.app, secretSetting.controlEl)
+        .setValue(this.plugin.settings.secretApiKeyName)
+        .onChange(async (value) => {
+          this.plugin.settings.secretApiKeyName = value;
+          await this.plugin.saveSettings();
+        });
+    } else {
+      new Setting(containerEl)
+        .setName("API key (SecretStorage, recommended)")
+        .setDesc(SECRET_STORAGE_VERSION_MESSAGE)
+        .addText((text) => {
+          text
+            .setPlaceholder("Update Obsidian to enable SecretStorage")
+            .setValue(this.plugin.settings.secretApiKeyName)
+            .setDisabled(true);
+        });
+    }
+
     new Setting(containerEl)
-      .setName("API key")
-      .setDesc("Your Google AI API key")
+      .setName("API key (deprecated, not recommended)")
+      .setDesc("Legacy plain-text API key. Used only as fallback.")
       .addText((text) => {
         // mask input
         text.inputEl.type = "password";
