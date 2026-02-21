@@ -43,6 +43,17 @@ export class TranscriptionProgressView extends ItemView {
   private currentSession?: TranscriptionSession;
   private pendingEvents: ProgressEvent[] = [];
 
+  private formatLocaleDateTime(date: Date): string {
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "medium",
+      }).format(date);
+    } catch {
+      return date.toLocaleString();
+    }
+  }
+
   private async openTargetFile(session: TranscriptionSession): Promise<void> {
     if (!session.targetPath) {
       return;
@@ -151,6 +162,11 @@ export class TranscriptionProgressView extends ItemView {
   }
 
   private createNewSession(): TranscriptionSession {
+    const startedAtMs = Date.now();
+    const startText = `Log start: ${this.formatLocaleDateTime(
+      new Date(startedAtMs)
+    )}`;
+
     // Create new session container (always add to the top)
     const newSessionEl = document.createElement("div");
     newSessionEl.className = "transcription-audio-session";
@@ -259,14 +275,14 @@ export class TranscriptionProgressView extends ItemView {
       cancelButtonEl,
       logHistoryEl,
       indicatorEl,
-      logHistory: ["Log start"],
+      logHistory: [startText],
       isLogExpanded: false,
       isCancellable: true,
       audioPath: undefined,
       targetPath: undefined,
       targetLine: undefined,
       targetCh: undefined,
-      startedAtMs: 0,
+      startedAtMs,
       chunkTotal: 0,
       chunkIndex: 0,
     };
@@ -396,7 +412,6 @@ export class TranscriptionProgressView extends ItemView {
           `File detected: ${name}`,
           newSession
         );
-        newSession.startedAtMs = Date.now();
 
         // Process buffered events (model-selected, target-file-selected, etc.)
         for (const pendingEvent of this.pendingEvents) {
