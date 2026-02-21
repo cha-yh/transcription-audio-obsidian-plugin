@@ -20,11 +20,13 @@ interface TranscriptionSession {
   chunkLabelEl?: HTMLElement;
   logEl: HTMLElement;
   latestLogEl: HTMLElement;
-  detailButtonEl: HTMLElement;
+  detailButtonEl: HTMLButtonElement;
+  cancelButtonEl: HTMLButtonElement;
   logHistoryEl: HTMLElement;
   indicatorEl: HTMLElement;
   logHistory: string[];
   isLogExpanded: boolean;
+  isCancellable: boolean;
   startedAtMs: number;
   chunkTotal: number;
   chunkIndex: number;
@@ -172,6 +174,11 @@ export class TranscriptionProgressView extends ItemView {
       cls: "transcription-audio-detail-button",
     });
 
+    const cancelButtonEl = statusBarEl.createEl("button", {
+      text: "cancel",
+      cls: "transcription-audio-cancel-button",
+    });
+
     // Log detail area (hidden by default, shows full log history)
     const logHistoryEl = logEl.createEl("div", {
       cls: "transcription-audio-log-history",
@@ -189,10 +196,12 @@ export class TranscriptionProgressView extends ItemView {
       logEl,
       latestLogEl,
       detailButtonEl,
+      cancelButtonEl,
       logHistoryEl,
       indicatorEl,
       logHistory: ["Log start"],
       isLogExpanded: false,
+      isCancellable: true,
       startedAtMs: 0,
       chunkTotal: 0,
       chunkIndex: 0,
@@ -201,6 +210,19 @@ export class TranscriptionProgressView extends ItemView {
     // Detail button click event - toggle only this session's log
     detailButtonEl.addEventListener("click", () => {
       this.toggleLogHistory(session);
+    });
+
+    cancelButtonEl.addEventListener("click", () => {
+      if (!session.isCancellable) {
+        return;
+      }
+
+      session.isCancellable = false;
+      session.cancelButtonEl.disabled = true;
+      session.cancelButtonEl.setText("cancelling...");
+      session.statusEl.setText("Cancelling");
+      this.pushLog("Cancelling", "Cancel requested by user", session);
+      progressBus.publish({ stage: "cancel-requested" });
     });
 
     this.currentSession = session;
@@ -244,6 +266,15 @@ export class TranscriptionProgressView extends ItemView {
       session.indicatorEl.innerHTML = `<svg class="transcription-audio-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`;
       session.indicatorEl.className = "transcription-audio-indicator";
     }
+  }
+
+  private finalizeCancellation(
+    session: TranscriptionSession,
+    label: string
+  ): void {
+    session.isCancellable = false;
+    session.cancelButtonEl.disabled = true;
+    session.cancelButtonEl.setText(label);
   }
 
   private processEvent(e: ProgressEvent, session: TranscriptionSession): void {
@@ -457,6 +488,38 @@ export class TranscriptionProgressView extends ItemView {
         );
         break;
       }
+      case "cancel-requested": {
+        if (!this.currentSession) {
+          break;
+        }
+        if (!this.currentSession.isCancellable) {
+          break;
+        }
+        this.currentSession.isCancellable = false;
+        this.currentSession.cancelButtonEl.disabled = true;
+        this.currentSession.cancelButtonEl.setText("cancelling...");
+        this.currentSession.statusEl.setText("Cancelling");
+        this.pushLog(
+          "Cancelling",
+          "Cancel requested by user",
+          this.currentSession
+        );
+        break;
+      }
+      case "cancelled": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.currentSession.statusEl.setText("Cancelled");
+        this.pushLog(
+          "Cancelled by user",
+          "Cancelled by user",
+          this.currentSession
+        );
+        this.updateIndicator(this.currentSession, "error");
+        this.finalizeCancellation(this.currentSession, "cancelled");
+        break;
+      }
       case "success": {
         if (!this.currentSession) {
           break;
@@ -473,6 +536,7 @@ export class TranscriptionProgressView extends ItemView {
         );
         // Update indicator to check icon
         this.updateIndicator(this.currentSession, "success");
+        this.finalizeCancellation(this.currentSession, "done");
         break;
       }
       case "error": {
@@ -488,6 +552,7 @@ export class TranscriptionProgressView extends ItemView {
         );
         // Update indicator to error icon
         this.updateIndicator(this.currentSession, "error");
+        this.finalizeCancellation(this.currentSession, "failed");
         break;
       }
     }

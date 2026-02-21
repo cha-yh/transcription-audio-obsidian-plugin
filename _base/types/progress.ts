@@ -12,6 +12,8 @@ export type ProgressStage =
   | "api-request-start"
   | "api-request-retry"
   | "api-request-complete"
+  | "cancel-requested"
+  | "cancelled"
   | "success"
   | "error";
 
@@ -34,5 +36,7 @@ export type ProgressEvent =
   | { stage: "api-request-start" }
   | { stage: "api-request-retry"; attempt: number; message?: string }
   | { stage: "api-request-complete"; elapsedMs: number }
+  | { stage: "cancel-requested" }
+  | { stage: "cancelled" }
   | { stage: "success" }
   | { stage: "error"; message: string };

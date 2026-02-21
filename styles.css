@@ -58,6 +58,24 @@
   background-color: var(--background-modifier-hover);
 }
 
+.transcription-audio-cancel-button {
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background-color: var(--background-secondary);
+  border-radius: 4px;
+}
+
+.transcription-audio-cancel-button:hover:enabled {
+  background-color: var(--background-modifier-hover);
+}
+
+.transcription-audio-cancel-button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
 .transcription-audio-log-history {
   margin-top: 8px;
   padding-top: 8px;

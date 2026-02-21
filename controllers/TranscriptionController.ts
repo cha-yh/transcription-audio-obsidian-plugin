@@ -1,6 +1,10 @@
 import { App, Editor, Notice, TFile } from "obsidian";
 import { ObsidianInteractorService } from "../_base/services/obsidian/ObsidianInteractorService";
-import { TranscriptionService } from "../_base/services/transcription/TranscriptionService";
+import {
+  TranscriptionCancelledError,
+  TranscriptionService,
+  isTranscriptionCancelledError,
+} from "../_base/services/transcription/TranscriptionService";
 import { computeWavChunkRanges } from "../_base/services/transcription/chunking";
 import { progressBus } from "../_base/utils/progressBus";
 import { ObsidianFileService } from "_base/services/obsidian/obisdianFileService";
@@ -63,21 +67,38 @@ export class TranscriptionController {
       );
     }
 
-    await this.openProgressView();
-
-    progressBus.publish({
-      stage: "model-selected",
-      model: model,
+    let cancelRequested = false;
+    const abortController = new AbortController();
+    const unsubscribeCancel = progressBus.subscribe((event) => {
+      if (event.stage === "cancel-requested") {
+        cancelRequested = true;
+        abortController.abort();
+      }
     });
 
-    progressBus.publish({
-      stage: "target-file-selected",
-      path: activeFile.path,
-      line: currentCursorPosition.line,
-      ch: currentCursorPosition.ch,
-    });
+    const throwIfCancelled = () => {
+      if (cancelRequested || abortController.signal.aborted) {
+        throw new TranscriptionCancelledError();
+      }
+    };
 
     try {
+      await this.openProgressView();
+
+      throwIfCancelled();
+
+      progressBus.publish({
+        stage: "model-selected",
+        model: model,
+      });
+
+      progressBus.publish({
+        stage: "target-file-selected",
+        path: activeFile.path,
+        line: currentCursorPosition.line,
+        ch: currentCursorPosition.ch,
+      });
+
       progressBus.publish({ stage: "file-detected", fileName: filePath });
       const file = this.app.vault.getAbstractFileByPath(filePath);
       if (file == null || !(file instanceof TFile))
@@ -85,6 +106,8 @@ export class TranscriptionController {
 
       try {
         const audioBuffer = await this.app.vault.readBinary(file);
+
+        throwIfCancelled();
 
         this.writing = true;
 
@@ -113,6 +136,8 @@ export class TranscriptionController {
             let combined = "";
             let index = 0;
             for (const c of chunks) {
+              throwIfCancelled();
+
               index++;
               progressBus.publish({
                 stage: "chunk-start",
@@ -152,8 +177,12 @@ export class TranscriptionController {
                       stage: "api-request-complete",
                       elapsedMs: apiRequestElapsedMs,
                     });
-                  }
+                  },
+                  abortController.signal
                 );
+
+                throwIfCancelled();
+
                 combined += preface + text.trim();
                 progressBus.publish({
                   stage: "chunk-complete",
@@ -161,6 +190,10 @@ export class TranscriptionController {
                   chunkTotal: chunks.length,
                 });
               } catch (e) {
+                if (isTranscriptionCancelledError(e)) {
+                  throw e;
+                }
+
                 progressBus.publish({
                   stage: "chunk-failed",
                   chunkIndex: index,
@@ -200,9 +233,14 @@ export class TranscriptionController {
                   stage: "api-request-complete",
                   elapsedMs: apiRequestElapsedMs,
                 });
-              }
+              },
+              abortController.signal
             );
+
+            throwIfCancelled();
           }
+
+          throwIfCancelled();
 
           await this.obsidianInteractor.appendTextToFile(
             activeFile.path,
@@ -213,6 +251,12 @@ export class TranscriptionController {
 
           progressBus.publish({ stage: "success" });
         } catch (e) {
+          if (isTranscriptionCancelledError(e)) {
+            new Notice("Transcription cancelled");
+            progressBus.publish({ stage: "cancelled" });
+            return;
+          }
+
           console.error("[TranscriptionController] error", e);
           new Notice("Transcription failed");
           progressBus.publish({
@@ -224,14 +268,28 @@ export class TranscriptionController {
           console.debug("[TranscriptionController] writing flag cleared");
         }
       } catch (error) {
+        if (isTranscriptionCancelledError(error)) {
+          new Notice("Transcription cancelled");
+          progressBus.publish({ stage: "cancelled" });
+          return;
+        }
+
         console.error("[readBinary] error", error);
         new Notice("Transcription failed");
         progressBus.publish({ stage: "error", message: error.message });
       }
     } catch (error) {
+      if (isTranscriptionCancelledError(error)) {
+        new Notice("Transcription cancelled");
+        progressBus.publish({ stage: "cancelled" });
+        return;
+      }
+
       console.warn(error.message);
       new Notice("Transcription failed");
       progressBus.publish({ stage: "error", message: error.message });
+    } finally {
+      unsubscribeCancel();
     }
   }
 
