@@ -76,6 +76,26 @@
   cursor: default;
 }
 
+.transcription-audio-target-link,
+.transcription-audio-file-link {
+  color: var(--link-color);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.transcription-audio-target-link:hover,
+.transcription-audio-file-link:hover {
+  color: var(--link-color-hover);
+}
+
+.transcription-audio-target-link.is-disabled,
+.transcription-audio-file-link.is-disabled {
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: default;
+  pointer-events: none;
+}
+
 .transcription-audio-log-history {
   margin-top: 8px;
   padding-top: 8px;

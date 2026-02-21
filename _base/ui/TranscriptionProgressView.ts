@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf } from "obsidian";
+import { ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import { progressBus } from "../utils/progressBus";
 import {
   VIEW_ICON,
@@ -10,10 +10,10 @@ import { formatBytes, formatDuration } from "../utils/format";
 
 interface TranscriptionSession {
   sessionEl: HTMLElement;
-  fileNameEl: HTMLElement;
+  fileNameEl: HTMLAnchorElement;
   fileSizeEl: HTMLElement;
   statusEl: HTMLElement;
-  targetFileEl: HTMLElement;
+  targetFileEl: HTMLAnchorElement;
   modelEl: HTMLElement;
   chunkWrapEl?: HTMLElement;
   chunkBarEl?: HTMLProgressElement;
@@ -27,6 +27,10 @@ interface TranscriptionSession {
   logHistory: string[];
   isLogExpanded: boolean;
   isCancellable: boolean;
+  audioPath?: string;
+  targetPath?: string;
+  targetLine?: number;
+  targetCh?: number;
   startedAtMs: number;
   chunkTotal: number;
   chunkIndex: number;
@@ -38,6 +42,54 @@ export class TranscriptionProgressView extends ItemView {
   private sessionsContainerEl!: HTMLElement;
   private currentSession?: TranscriptionSession;
   private pendingEvents: ProgressEvent[] = [];
+
+  private async openTargetFile(session: TranscriptionSession): Promise<void> {
+    if (!session.targetPath) {
+      return;
+    }
+
+    const abstractFile = this.app.vault.getAbstractFileByPath(session.targetPath);
+    if (!(abstractFile instanceof TFile)) {
+      new Notice(`Target file not found: ${session.targetPath}`);
+      return;
+    }
+
+    const leaf =
+      this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit) ??
+      this.app.workspace.getLeavesOfType("markdown")[0] ??
+      this.app.workspace.getLeaf(false);
+    await leaf.openFile(abstractFile, { active: true });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.app.workspace.revealLeaf(leaf);
+
+    const view = leaf.view;
+    if (view instanceof MarkdownView) {
+      const line = session.targetLine ?? 0;
+      const ch = session.targetCh ?? 0;
+      view.editor.setCursor({ line, ch });
+      view.editor.focus();
+    }
+  }
+
+  private async openAudioFile(session: TranscriptionSession): Promise<void> {
+    if (!session.audioPath) {
+      return;
+    }
+
+    const abstractFile = this.app.vault.getAbstractFileByPath(session.audioPath);
+    if (!(abstractFile instanceof TFile)) {
+      new Notice(`Audio file not found: ${session.audioPath}`);
+      return;
+    }
+
+    const leaf =
+      this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit) ??
+      this.app.workspace.getLeavesOfType("markdown")[0] ??
+      this.app.workspace.getLeaf(false);
+    await leaf.openFile(abstractFile, { active: true });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.app.workspace.revealLeaf(leaf);
+  }
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -119,7 +171,11 @@ export class TranscriptionProgressView extends ItemView {
     });
     const row1 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row1.createEl("span", { text: "File: ", cls: "transcription-audio-label" });
-    const fileNameEl = row1.createEl("span", { text: "-" });
+    const fileNameEl = row1.createEl("a", {
+      text: "-",
+      cls: "internal-link transcription-audio-file-link is-disabled",
+    });
+    fileNameEl.href = "#";
 
     const row2 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row2.createEl("span", { text: "Size: ", cls: "transcription-audio-label" });
@@ -137,7 +193,11 @@ export class TranscriptionProgressView extends ItemView {
       text: "Target: ",
       cls: "transcription-audio-label",
     });
-    const targetFileEl = row4.createEl("span", { text: "-" });
+    const targetFileEl = row4.createEl("a", {
+      text: "-",
+      cls: "internal-link transcription-audio-target-link is-disabled",
+    });
+    targetFileEl.href = "#";
 
     const row5 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row5.createEl("span", {
@@ -202,6 +262,10 @@ export class TranscriptionProgressView extends ItemView {
       logHistory: ["Log start"],
       isLogExpanded: false,
       isCancellable: true,
+      audioPath: undefined,
+      targetPath: undefined,
+      targetLine: undefined,
+      targetCh: undefined,
       startedAtMs: 0,
       chunkTotal: 0,
       chunkIndex: 0,
@@ -210,6 +274,20 @@ export class TranscriptionProgressView extends ItemView {
     // Detail button click event - toggle only this session's log
     detailButtonEl.addEventListener("click", () => {
       this.toggleLogHistory(session);
+    });
+
+    fileNameEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (session.audioPath) {
+        void this.openAudioFile(session);
+      }
+    });
+
+    targetFileEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (session.targetPath) {
+        void this.openTargetFile(session);
+      }
     });
 
     cancelButtonEl.addEventListener("click", () => {
@@ -286,7 +364,12 @@ export class TranscriptionProgressView extends ItemView {
       }
       case "target-file-selected": {
         const name = e.path.split("/").pop() || e.path;
+        session.targetPath = e.path;
+        session.targetLine = e.line;
+        session.targetCh = e.ch;
+        session.targetFileEl.classList.remove("is-disabled");
         session.targetFileEl.setText(`${name} (${e.line}:${e.ch})`);
+        session.targetFileEl.title = e.path;
         this.pushLog(
           `Target selected: ${name}`,
           `Target selected: ${e.path} @ ${e.line}:${e.ch}`,
@@ -303,7 +386,10 @@ export class TranscriptionProgressView extends ItemView {
         // Start new transcription session - add new session container to the top
         const newSession = this.createNewSession();
         const name = e.fileName.split("/").pop() || e.fileName;
+        newSession.audioPath = e.fileName;
         newSession.fileNameEl.setText(name);
+        newSession.fileNameEl.title = e.fileName;
+        newSession.fileNameEl.classList.remove("is-disabled");
         newSession.statusEl.setText("File detected");
         this.pushLog(
           `File detected: ${name}`,
