@@ -59,6 +59,14 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 
 ## Changelog
 
+### Version 0.5.0
+
+- **Transcription mode enhancements**
+  - Added Template mode so prompt and output template can be configured separately
+- **Gemini 3 Pro Preview migration**
+  - Added automatic migration from `gemini-3-pro-preview` to `gemini-3.1-pro-preview`
+  - Updated related settings and documentation for current model options
+
 ### Version 0.4.1
 
 - **Gemini 3 Pro Preview migration**
