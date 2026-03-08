@@ -38,6 +38,25 @@ export function isTranscriptionCancelledError(error: unknown): boolean {
 export class TranscriptionService {
   constructor() {}
 
+  private extractUsage(response: {
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      thoughtsTokenCount?: number;
+      toolUsePromptTokenCount?: number;
+      totalTokenCount?: number;
+    };
+  }): TranscriptionUsage {
+    const usage = response.usageMetadata;
+    return {
+      promptTokenCount: usage?.promptTokenCount,
+      candidatesTokenCount: usage?.candidatesTokenCount,
+      thoughtsTokenCount: usage?.thoughtsTokenCount,
+      toolUsePromptTokenCount: usage?.toolUsePromptTokenCount,
+      totalTokenCount: usage?.totalTokenCount,
+    };
+  }
+
   private throwIfCancelled(abortSignal?: AbortSignal): void {
     if (abortSignal?.aborted) {
       throw new TranscriptionCancelledError();
@@ -131,7 +150,9 @@ export class TranscriptionService {
 
     const uploadUrl = startResponse.headers.get("x-goog-upload-url");
     if (!uploadUrl) {
-      throw new Error("File upload initialization failed: upload URL not found");
+      throw new Error(
+        "File upload initialization failed: upload URL not found"
+      );
     }
 
     let offset = 0;
@@ -188,7 +209,9 @@ export class TranscriptionService {
 
       if (uploadStatus !== "active") {
         throw new Error(
-          `File upload failed: unexpected upload status '${uploadStatus ?? "unknown"}'`
+          `File upload failed: unexpected upload status '${
+            uploadStatus ?? "unknown"
+          }'`
         );
       }
 
@@ -322,14 +345,7 @@ export class TranscriptionService {
 
       const text = response.text;
 
-      const usage = response.usageMetadata;
-      const usageInfo: TranscriptionUsage = {
-        promptTokenCount: usage?.promptTokenCount,
-        candidatesTokenCount: usage?.candidatesTokenCount,
-        thoughtsTokenCount: usage?.thoughtsTokenCount,
-        toolUsePromptTokenCount: usage?.toolUsePromptTokenCount,
-        totalTokenCount: usage?.totalTokenCount,
-      };
+      const usageInfo = this.extractUsage(response);
 
       const apiRequestElapsedMs = Math.round(
         performance.now() - apiRequestStartAt
@@ -347,4 +363,5 @@ export class TranscriptionService {
       throw error;
     }
   }
+
 }

@@ -34,8 +34,12 @@ Open Settings → Transcription Audio:
 - API Key (SecretStorage, recommended): Select the secret name from Obsidian SecretStorage
 - API Key (deprecated, not recommended): Legacy plain-text API key field kept for backward compatibility fallback
 - On older Obsidian versions, SecretStorage is disabled and you will see an update-required message (Obsidian 1.11.4+)
+- Transcription mode:
+  - Basic mode (default): prompt only
+  - Template mode: dedicated prompt + output template (both prefilled with defaults)
 - Model: Select a Gemini-compatible model
-- Prompt: Customize the instruction sent before your audio content
+- Prompt: Customize the instruction for the selected mode
+- Output template: Available in template mode to enforce a consistent final markdown structure
 
 ## Usage
 

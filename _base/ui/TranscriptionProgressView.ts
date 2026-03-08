@@ -3,7 +3,6 @@ import { progressBus } from "../utils/progressBus";
 import {
   VIEW_ICON,
   VIEW_TITLE,
-  VIEW_TYPE_PROGRESS,
 } from "../constants/progress";
 import type { ProgressEvent } from "../types/progress";
 import { formatBytes, formatDuration } from "../utils/format";
@@ -114,12 +113,12 @@ export class TranscriptionProgressView extends ItemView {
     this.app.workspace.revealLeaf(leaf);
   }
 
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(leaf: WorkspaceLeaf, private readonly viewType: string) {
     super(leaf);
   }
 
   getViewType(): string {
-    return VIEW_TYPE_PROGRESS;
+    return this.viewType;
   }
   getDisplayText(): string {
     return VIEW_TITLE;

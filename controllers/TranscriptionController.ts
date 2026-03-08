@@ -9,9 +9,11 @@ import {
 import { computeWavChunkRanges } from "../_base/services/transcription/chunking";
 import { progressBus } from "../_base/utils/progressBus";
 import { ObsidianFileService } from "_base/services/obsidian/obisdianFileService";
-import { VIEW_TYPE_PROGRESS } from "_base/constants/progress";
 import { AudioService } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
+
+const CHUNK_TRANSCRIPTION_PROMPT =
+  "Transcribe the following audio. Output only the transcript text for this part, without any extra commentary.";
 
 export class TranscriptionController {
   private writing: boolean = false;
@@ -24,13 +26,14 @@ export class TranscriptionController {
     new TranscriptionService();
   private audioService: AudioService = new AudioService();
 
-  constructor(private app: App) {}
+  constructor(private app: App, private progressViewType: string) {}
 
   async run(
     editor: Editor,
     apiKey: string | undefined,
     prompt: string,
-    model: string
+    model: string,
+    outputTemplate: string
   ): Promise<void> {
     const currentCursorPosition = editor.getCursor();
     const activeFile = this.app.workspace.getActiveFile();
@@ -83,6 +86,13 @@ export class TranscriptionController {
       }
     };
 
+    const normalizedTemplate = outputTemplate.trim();
+    const hasOutputTemplate = normalizedTemplate.length > 0;
+
+    const templateModePrompt = hasOutputTemplate
+      ? `${prompt}\n\nUse the following markdown template exactly when generating output:\n${normalizedTemplate}\n\nRules:\n- Output only the final filled markdown template.\n- Preserve heading order, heading titles, list/checklist style, and section structure exactly.\n- If a section cannot be filled from audio, write N/A.`
+      : prompt;
+
     const publishUsage = (result: TranscriptionResult) => {
       progressBus.publish({
         stage: "api-usage",
@@ -132,7 +142,7 @@ export class TranscriptionController {
 
         try {
           let transcript: string;
-          if (this.isPcm16Wav(audioBuffer)) {
+          if (this.isPcm16Wav(audioBuffer) && !hasOutputTemplate) {
             progressBus.publish({ stage: "preparing-audio" });
             const header = this.audioService.parseWavHeader(audioBuffer);
             const chunks = computeWavChunkRanges({
@@ -143,8 +153,6 @@ export class TranscriptionController {
               targetChunkMB: 8,
               overlapMs: 1500,
             });
-            const chunkPrompt =
-              "Transcribe the following audio. Output only the transcript text for this part, without any extra commentary.";
             let combined = "";
             let index = 0;
             for (const c of chunks) {
@@ -167,7 +175,7 @@ export class TranscriptionController {
                   await this.audioService.arrayBufferToBase64Async(chunkBuffer);
                 const result = await this.transcriptionService.transcribe(
                   apiKey!,
-                  chunkPrompt,
+                  CHUNK_TRANSCRIPTION_PROMPT,
                   chunkBase64,
                   "audio/wav",
                   model,
@@ -227,7 +235,7 @@ export class TranscriptionController {
               await this.audioService.arrayBufferToBase64Async(audioBuffer);
             const result = await this.transcriptionService.transcribe(
               apiKey!,
-              prompt,
+              templateModePrompt,
               audioBase64,
               mimeType,
               model,
@@ -313,7 +321,7 @@ export class TranscriptionController {
   }
 
   private async openProgressView(): Promise<void> {
-    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_PROGRESS);
+    const leaves = this.app.workspace.getLeavesOfType(this.progressViewType);
     if (leaves.length > 0) {
       this.app.workspace.revealLeaf(leaves[0]);
       return;
@@ -321,14 +329,14 @@ export class TranscriptionController {
     const rightSplit = this.app.workspace.getRightLeaf(false);
     if (rightSplit) {
       await rightSplit.setViewState({
-        type: VIEW_TYPE_PROGRESS,
+        type: this.progressViewType,
         active: true,
       });
       this.app.workspace.revealLeaf(rightSplit);
     } else {
       const leaf = this.app.workspace.getLeaf(true);
       await leaf.setViewState({
-        type: VIEW_TYPE_PROGRESS,
+        type: this.progressViewType,
         active: true,
       });
       this.app.workspace.revealLeaf(leaf);

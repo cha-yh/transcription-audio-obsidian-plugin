@@ -3,6 +3,41 @@
   height: 400px;
 }
 
+.setting-item-control.transcription-audio-setting-with-reset {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+}
+
+.transcription-audio-setting-action-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+  width: 100%;
+}
+
+.transcription-audio-setting-text-button {
+  border: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  appearance: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--link-color);
+  cursor: pointer;
+}
+
+.transcription-audio-setting-text-button:hover,
+.transcription-audio-setting-text-button:focus,
+.transcription-audio-setting-text-button:active {
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  color: var(--link-color-hover);
+  text-decoration: underline;
+}
+
 .transcription-audio-latest-log {
   display: flex;
   align-items: center;
