@@ -37,7 +37,8 @@ Open Settings → Transcription Audio:
 - Transcription mode:
   - Basic mode (default): prompt only
   - Template mode: dedicated prompt + output template (both prefilled with defaults)
-- Model: Select a Gemini-compatible model
+- Model: Select a Gemini-compatible model (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`)
+- `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
 - Prompt: Customize the instruction for the selected mode
 - Output template: Available in template mode to enforce a consistent final markdown structure
 
@@ -57,6 +58,12 @@ Open Settings → Transcription Audio:
 Audio content is sent to Google’s Gemini API for processing. The plugin does not store your audio or transcripts outside your vault. Keep your API key secure and review your organization’s data policies before use.
 
 ## Changelog
+
+### Version 0.4.1
+
+- **Gemini 3 Pro Preview migration**
+  - Replaced `gemini-3-pro-preview` with `gemini-3.1-pro-preview` in model selection
+  - Automatically migrates previously saved `gemini-3-pro-preview` setting to `gemini-3.1-pro-preview`
 
 ### Version 0.4.0
 

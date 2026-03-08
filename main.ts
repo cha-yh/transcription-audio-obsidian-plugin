@@ -15,6 +15,7 @@ import { AudioPluginSettings } from "_base/types/setting";
 import {
   DEFAULT_SETTINGS,
   MODELS,
+  MODEL_MIGRATIONS,
   DEFAULT_BASIC_MODE_PROMPT,
   DEFAULT_TEMPLATE_MODE_PROMPT,
   DEFAULT_OUTPUT_TEMPLATE,
@@ -71,6 +72,18 @@ export default class TranscriptionAudioPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+
+    const previousModel = this.settings.model;
+    const migratedModel = MODEL_MIGRATIONS[previousModel] || previousModel;
+    if (MODELS.includes(migratedModel)) {
+      this.settings.model = migratedModel;
+    } else {
+      this.settings.model = DEFAULT_SETTINGS.model;
+    }
+
+    if (this.settings.model !== previousModel) {
+      await this.saveSettings();
+    }
   }
 
   async saveSettings() {
