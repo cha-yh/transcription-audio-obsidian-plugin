@@ -158,6 +158,87 @@ export class AudioService {
     return out;
   }
 
+  async getAudioDurationMs(audioBuffer: ArrayBuffer): Promise<number> {
+    const audioContext = new AudioContext();
+    try {
+      const decodedBuffer = await audioContext.decodeAudioData(
+        audioBuffer.slice(0)
+      );
+      return Math.floor(decodedBuffer.duration * 1000);
+    } finally {
+      await audioContext.close();
+    }
+  }
+
+  async decodeToWavPcm16(
+    audioBuffer: ArrayBuffer,
+    targetSampleRate: number = 16000
+  ): Promise<ArrayBuffer> {
+    const audioContext = new AudioContext();
+    try {
+      const decodedBuffer = await audioContext.decodeAudioData(
+        audioBuffer.slice(0)
+      );
+
+      const totalSamples = Math.ceil(
+        decodedBuffer.duration * targetSampleRate
+      );
+      const offlineCtx = new OfflineAudioContext(
+        1,
+        totalSamples,
+        targetSampleRate
+      );
+
+      const source = offlineCtx.createBufferSource();
+      source.buffer = decodedBuffer;
+      source.connect(offlineCtx.destination);
+      source.start(0);
+
+      const renderedBuffer = await offlineCtx.startRendering();
+      const pcmData = renderedBuffer.getChannelData(0);
+
+      return this.createWavFromFloat32Pcm(pcmData, targetSampleRate);
+    } finally {
+      await audioContext.close();
+    }
+  }
+
+  private createWavFromFloat32Pcm(
+    pcmData: Float32Array,
+    sampleRate: number
+  ): ArrayBuffer {
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const bytesPerSample = bitsPerSample / 8;
+    const bytesPerFrame = numChannels * bytesPerSample;
+    const dataSize = pcmData.length * bytesPerSample;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+
+    this.writeString(view, 0, "RIFF");
+    view.setUint32(4, 36 + dataSize, true);
+    this.writeString(view, 8, "WAVE");
+    this.writeString(view, 12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * bytesPerFrame, true);
+    view.setUint16(32, bytesPerFrame, true);
+    view.setUint16(34, bitsPerSample, true);
+    this.writeString(view, 36, "data");
+    view.setUint32(40, dataSize, true);
+
+    let offset = 44;
+    for (let i = 0; i < pcmData.length; i++) {
+      const s = Math.max(-1, Math.min(1, pcmData[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+
+    return buffer;
+  }
+
   private writeString(view: DataView, offset: number, string: string): void {
     for (let i = 0; i < string.length; i++) {
       view.setUint8(offset + i, string.charCodeAt(i));

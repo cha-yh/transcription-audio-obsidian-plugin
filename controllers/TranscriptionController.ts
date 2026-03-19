@@ -6,7 +6,10 @@ import {
   TranscriptionService,
   isTranscriptionCancelledError,
 } from "../_base/services/transcription/TranscriptionService";
-import { computeWavChunkRanges } from "../_base/services/transcription/chunking";
+import {
+  computeWavChunkRanges,
+  computeTimeBasedChunkRanges,
+} from "../_base/services/transcription/chunking";
 import { progressBus } from "../_base/utils/progressBus";
 import { ObsidianFileService } from "_base/services/obsidian/obisdianFileService";
 import { AudioService } from "../_base/services/audio/AudioService";
@@ -233,43 +236,165 @@ export class TranscriptionController {
             }
             transcript = combined.trim();
           } else if (enableTranscribeThenSummarize) {
-            // Step 1: Transcription only
+            // Step 1: Transcription with chunking
             const transcriptionStepStart = performance.now();
             progressBus.publish({ stage: "transcription-step-start" });
 
-            const audioBase64 =
-              await this.audioService.arrayBufferToBase64Async(audioBuffer);
-            const transcriptionResult =
-              await this.transcriptionService.transcribe(
-                apiKey!,
-                DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-                audioBase64,
-                mimeType,
-                model,
-                6 * 60 * 1000,
-                () => {
-                  progressBus.publish({ stage: "file-upload-start" });
-                },
-                (uploadElapsedMs) => {
-                  progressBus.publish({
-                    stage: "file-upload-complete",
-                    elapsedMs: uploadElapsedMs,
-                  });
-                },
-                () => {
-                  progressBus.publish({ stage: "api-request-start" });
-                },
-                (apiRequestElapsedMs) => {
-                  progressBus.publish({
-                    stage: "api-request-complete",
-                    elapsedMs: apiRequestElapsedMs,
-                  });
-                },
-                abortController.signal
-              );
+            const CHUNK_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+            const CHUNK_DURATION_MS = 20 * 60 * 1000; // 20 minutes
 
-            publishUsage(transcriptionResult);
-            const rawTranscript = transcriptionResult.text;
+            // Determine audio duration without full WAV conversion
+            let totalMs: number;
+            if (this.isPcm16Wav(audioBuffer)) {
+              const header = this.audioService.parseWavHeader(audioBuffer);
+              const bytesPerFrame =
+                header.numChannels * (header.bitsPerSample / 8);
+              const totalFrames = Math.floor(header.dataSize / bytesPerFrame);
+              totalMs = Math.floor(
+                (totalFrames / header.sampleRate) * 1000
+              );
+            } else {
+              totalMs =
+                await this.audioService.getAudioDurationMs(audioBuffer);
+            }
+
+            let rawTranscript: string;
+            if (totalMs < CHUNK_THRESHOLD_MS) {
+              // Under 30 minutes: single request with original file
+              const audioBase64 =
+                await this.audioService.arrayBufferToBase64Async(audioBuffer);
+              const transcriptionResult =
+                await this.transcriptionService.transcribe(
+                  apiKey!,
+                  DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
+                  audioBase64,
+                  mimeType,
+                  model,
+                  6 * 60 * 1000,
+                  () => {
+                    progressBus.publish({ stage: "file-upload-start" });
+                  },
+                  (uploadElapsedMs) => {
+                    progressBus.publish({
+                      stage: "file-upload-complete",
+                      elapsedMs: uploadElapsedMs,
+                    });
+                  },
+                  () => {
+                    progressBus.publish({ stage: "api-request-start" });
+                  },
+                  (apiRequestElapsedMs) => {
+                    progressBus.publish({
+                      stage: "api-request-complete",
+                      elapsedMs: apiRequestElapsedMs,
+                    });
+                  },
+                  abortController.signal
+                );
+
+              publishUsage(transcriptionResult);
+              rawTranscript = transcriptionResult.text;
+            } else {
+              // 30 minutes or longer: decode to WAV PCM16 and chunk
+              progressBus.publish({ stage: "preparing-audio" });
+              let wavBuffer: ArrayBuffer;
+              if (this.isPcm16Wav(audioBuffer)) {
+                wavBuffer = audioBuffer;
+              } else {
+                wavBuffer =
+                  await this.audioService.decodeToWavPcm16(audioBuffer);
+              }
+
+              const chunks = computeTimeBasedChunkRanges({
+                totalMs,
+                chunkDurationMs: CHUNK_DURATION_MS,
+                overlapMs: 1500,
+              });
+
+              let combined = "";
+              let chunkIndex = 0;
+              for (const c of chunks) {
+                throwIfCancelled();
+
+                chunkIndex++;
+                progressBus.publish({
+                  stage: "chunk-start",
+                  chunkIndex: chunkIndex,
+                  chunkTotal: chunks.length,
+                });
+
+                const chunkBuffer = this.audioService.sliceWavPcm16(
+                  wavBuffer,
+                  c.startMs,
+                  c.endMs
+                );
+
+                try {
+                  const chunkBase64 =
+                    await this.audioService.arrayBufferToBase64Async(
+                      chunkBuffer
+                    );
+                  const result = await this.transcriptionService.transcribe(
+                    apiKey!,
+                    DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
+                    chunkBase64,
+                    "audio/wav",
+                    model,
+                    6 * 60 * 1000,
+                    () => {
+                      progressBus.publish({ stage: "file-upload-start" });
+                    },
+                    (uploadElapsedMs) => {
+                      progressBus.publish({
+                        stage: "file-upload-complete",
+                        elapsedMs: uploadElapsedMs,
+                      });
+                    },
+                    () => {
+                      progressBus.publish({ stage: "api-request-start" });
+                    },
+                    (apiRequestElapsedMs) => {
+                      progressBus.publish({
+                        stage: "api-request-complete",
+                        elapsedMs: apiRequestElapsedMs,
+                      });
+                    },
+                    abortController.signal
+                  );
+
+                  publishUsage(result);
+
+                  throwIfCancelled();
+
+                  if (combined.length > 0) {
+                    combined += "\n\n";
+                  }
+                  combined += result.text.trim();
+
+                  progressBus.publish({
+                    stage: "chunk-complete",
+                    chunkIndex: chunkIndex,
+                    chunkTotal: chunks.length,
+                  });
+                } catch (e) {
+                  if (isTranscriptionCancelledError(e)) {
+                    throw e;
+                  }
+
+                  progressBus.publish({
+                    stage: "chunk-failed",
+                    chunkIndex: chunkIndex,
+                    chunkTotal: chunks.length,
+                    message: e?.message || String(e),
+                  });
+                  combined +=
+                    `\n\n[[Chunk ${chunkIndex} failed: ${
+                      e?.message || String(e)
+                    }]]`;
+                }
+              }
+              rawTranscript = combined.trim();
+            }
 
             const transcriptionStepElapsedMs = Math.round(
               performance.now() - transcriptionStepStart
@@ -281,7 +406,7 @@ export class TranscriptionController {
 
             throwIfCancelled();
 
-            // Create temp file with upload URI and transcription
+            // Create temp file with transcription
             const tempFilePath = await this.createTranscriptionTempFile(
               filePath,
               rawTranscript

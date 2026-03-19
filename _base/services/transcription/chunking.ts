@@ -1,5 +1,26 @@
 export type ChunkRange = { startMs: number; endMs: number };
 
+export function computeTimeBasedChunkRanges(params: {
+  totalMs: number;
+  chunkDurationMs?: number;
+  overlapMs?: number;
+}): ChunkRange[] {
+  const chunkDurationMs = params.chunkDurationMs ?? 20 * 60 * 1000;
+  const overlapMs = params.overlapMs ?? 1500;
+
+  const chunks: ChunkRange[] = [];
+  let cursor = 0;
+  while (cursor < params.totalMs) {
+    const startMs = cursor;
+    const endMs = Math.min(params.totalMs, startMs + chunkDurationMs);
+    chunks.push({ startMs, endMs });
+    if (endMs >= params.totalMs) break;
+    cursor = endMs - overlapMs;
+  }
+
+  return chunks;
+}
+
 export function computeWavChunkRanges(params: {
   dataSize: number;
   sampleRate: number;
