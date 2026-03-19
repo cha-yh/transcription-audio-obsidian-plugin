@@ -11,6 +11,7 @@ import { progressBus } from "../_base/utils/progressBus";
 import { ObsidianFileService } from "_base/services/obsidian/obisdianFileService";
 import { AudioService } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
+import { DEFAULT_TRANSCRIPTION_ONLY_PROMPT } from "_base/constants/setting";
 
 const CHUNK_TRANSCRIPTION_PROMPT =
   "Transcribe the following audio. Output only the transcript text for this part, without any extra commentary.";
@@ -33,7 +34,8 @@ export class TranscriptionController {
     apiKey: string | undefined,
     prompt: string,
     model: string,
-    outputTemplate: string
+    outputTemplate: string,
+    enableTranscribeThenSummarize: boolean = false
   ): Promise<void> {
     const currentCursorPosition = editor.getCursor();
     const activeFile = this.app.workspace.getActiveFile();
@@ -230,6 +232,102 @@ export class TranscriptionController {
               }
             }
             transcript = combined.trim();
+          } else if (enableTranscribeThenSummarize) {
+            // Step 1: Transcription only
+            const transcriptionStepStart = performance.now();
+            progressBus.publish({ stage: "transcription-step-start" });
+
+            const audioBase64 =
+              await this.audioService.arrayBufferToBase64Async(audioBuffer);
+            const transcriptionResult =
+              await this.transcriptionService.transcribe(
+                apiKey!,
+                DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
+                audioBase64,
+                mimeType,
+                model,
+                6 * 60 * 1000,
+                () => {
+                  progressBus.publish({ stage: "file-upload-start" });
+                },
+                (uploadElapsedMs) => {
+                  progressBus.publish({
+                    stage: "file-upload-complete",
+                    elapsedMs: uploadElapsedMs,
+                  });
+                },
+                () => {
+                  progressBus.publish({ stage: "api-request-start" });
+                },
+                (apiRequestElapsedMs) => {
+                  progressBus.publish({
+                    stage: "api-request-complete",
+                    elapsedMs: apiRequestElapsedMs,
+                  });
+                },
+                abortController.signal
+              );
+
+            publishUsage(transcriptionResult);
+            const rawTranscript = transcriptionResult.text;
+
+            const transcriptionStepElapsedMs = Math.round(
+              performance.now() - transcriptionStepStart
+            );
+            progressBus.publish({
+              stage: "transcription-step-complete",
+              elapsedMs: transcriptionStepElapsedMs,
+            });
+
+            throwIfCancelled();
+
+            // Create temp file with upload URI and transcription
+            const tempFilePath = await this.createTranscriptionTempFile(
+              filePath,
+              rawTranscript
+            );
+            progressBus.publish({
+              stage: "temp-file-created",
+              path: tempFilePath,
+            });
+
+            throwIfCancelled();
+
+            // Step 2: Summarization using transcribed text
+            const summarizationStepStart = performance.now();
+            progressBus.publish({ stage: "summarization-step-start" });
+
+            const summaryResult =
+              await this.transcriptionService.summarizeText(
+                apiKey!,
+                templateModePrompt,
+                rawTranscript,
+                model,
+                6 * 60 * 1000,
+                () => {
+                  progressBus.publish({ stage: "api-request-start" });
+                },
+                (apiRequestElapsedMs) => {
+                  progressBus.publish({
+                    stage: "api-request-complete",
+                    elapsedMs: apiRequestElapsedMs,
+                  });
+                },
+                abortController.signal
+              );
+
+            publishUsage(summaryResult);
+            transcript = summaryResult.text;
+
+            const summarizationStepElapsedMs = Math.round(
+              performance.now() - summarizationStepStart
+            );
+            progressBus.publish({
+              stage: "summarization-step-complete",
+              elapsedMs: summarizationStepElapsedMs,
+            });
+
+            throwIfCancelled();
           } else {
             const audioBase64 =
               await this.audioService.arrayBufferToBase64Async(audioBuffer);
@@ -356,6 +454,35 @@ export class TranscriptionController {
     };
     if (!ext) return "application/octet-stream";
     return map[ext.toLowerCase()] || "application/octet-stream";
+  }
+
+  private async createTranscriptionTempFile(
+    audioFilePath: string,
+    transcription: string
+  ): Promise<string> {
+    const audioName = audioFilePath
+      .split("/")
+      .pop()
+      ?.replace(/\.[^.]+$/, "") || "audio";
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .slice(0, 19);
+    const tempFileName = `_transcription_${audioName}_${timestamp}.md`;
+
+    const audioDir = audioFilePath.includes("/")
+      ? audioFilePath.substring(0, audioFilePath.lastIndexOf("/"))
+      : "";
+    const tempFilePath = audioDir
+      ? `${audioDir}/${tempFileName}`
+      : tempFileName;
+
+    const content =
+      `---\naudio: ${audioFilePath}\ncreated: ${new Date().toISOString()}\n---\n\n` +
+      `## Transcription\n\n${transcription}\n`;
+
+    await this.app.vault.create(tempFilePath, content);
+    return tempFilePath;
   }
 
   private isPcm16Wav(buffer: ArrayBuffer): boolean {

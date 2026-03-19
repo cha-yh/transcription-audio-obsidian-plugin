@@ -8,4 +8,5 @@ export interface AudioPluginSettings {
   prompt: string;
   templatePrompt: string;
   outputTemplate: string;
+  enableTranscribeThenSummarize: boolean;
 }

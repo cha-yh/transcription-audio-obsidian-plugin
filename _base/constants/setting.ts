@@ -63,6 +63,21 @@ export const DEFAULT_OUTPUT_TEMPLATE =
   "## Abstract\n" +
   "{{abstract-3-5-sentences}}";
 
+export const DEFAULT_TRANSCRIPTION_ONLY_PROMPT =
+  "Transcribe the following audio exactly as spoken. " +
+  "Output only the raw transcript text. " +
+  "Preserve the original language. " +
+  "Do not summarize, interpret, add commentary, or format with headings.\n\n" +
+  "Formatting rules:\n" +
+  "- Insert a line break (blank line) every time the speaker changes.\n" +
+  "- Each speaker's continuous speech must be on a single paragraph without line breaks.\n" +
+  "- Do not add speaker labels (e.g., 'Speaker 1:', 'Male:', 'Female:').\n" +
+  "- Do not add timestamps.\n\n" +
+  "Example output:\n" +
+  "I think we should go with option A. It makes more sense given the timeline.\n\n" +
+  "But what about the budget? We haven't checked the numbers yet.\n\n" +
+  "Right, let me pull up the spreadsheet and we can review it together.";
+
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
   mode: "basic",
   model: "gemini-3-flash-preview",
@@ -71,6 +86,7 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
   templatePrompt: DEFAULT_TEMPLATE_MODE_PROMPT,
   outputTemplate: DEFAULT_OUTPUT_TEMPLATE,
   prompt: DEFAULT_BASIC_MODE_PROMPT,
+  enableTranscribeThenSummarize: false,
 };
 
 export const MODELS: string[] = [

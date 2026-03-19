@@ -271,6 +271,65 @@ export class TranscriptionService {
     });
   }
 
+  async summarizeText(
+    apiKey: string,
+    prompt: string,
+    transcriptionText: string,
+    model: string,
+    timeoutMs: number = 6 * 60 * 1000,
+    onApiRequestStart?: () => void,
+    onApiRequestComplete?: (elapsedMs: number) => void,
+    abortSignal?: AbortSignal
+  ): Promise<TranscriptionResult> {
+    if (!apiKey) {
+      throw new Error("API Key is not provided.");
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      onApiRequestStart?.();
+      const apiRequestStartAt = performance.now();
+
+      const response = await this.raceWithTimeoutAndCancel(
+        ai.models.generateContent({
+          model: model,
+          contents: createUserContent([
+            `${prompt}\n\n${transcriptionText}`,
+          ]),
+          config: {
+            abortSignal,
+          },
+        }),
+        timeoutMs,
+        `Summarization timed out after ${timeoutMs} ms`,
+        abortSignal
+      );
+
+      if (!response.text) {
+        throw new Error("No text response from model");
+      }
+
+      const text = response.text;
+      const usageInfo = this.extractUsage(response);
+
+      const apiRequestElapsedMs = Math.round(
+        performance.now() - apiRequestStartAt
+      );
+      onApiRequestComplete?.(apiRequestElapsedMs);
+
+      return {
+        text,
+        usage: usageInfo,
+      };
+    } catch (error) {
+      if (!isTranscriptionCancelledError(error)) {
+        console.error("Summarization failed:", error);
+      }
+      throw error;
+    }
+  }
+
   async transcribe(
     apiKey: string,
     prompt: string,

@@ -632,6 +632,66 @@ export class TranscriptionProgressView extends ItemView {
 
         break;
       }
+      case "transcription-step-start": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.currentSession.statusEl.setText("Transcribing");
+        this.pushLog(
+          "Step 1: Transcription started",
+          "Step 1: Transcribing audio to raw text",
+          this.currentSession
+        );
+        break;
+      }
+      case "transcription-step-complete": {
+        if (!this.currentSession) {
+          break;
+        }
+        const durationText = formatDuration(e.elapsedMs);
+        this.pushLog(
+          `Step 1: Transcription done: ${durationText}`,
+          `Step 1: Transcription complete: ${durationText}`,
+          this.currentSession
+        );
+        break;
+      }
+      case "temp-file-created": {
+        if (!this.currentSession) {
+          break;
+        }
+        const fileName = e.path.split("/").pop() || e.path;
+        this.pushLog(
+          `Temp file: ${fileName}`,
+          `Transcription saved to: ${e.path}`,
+          this.currentSession
+        );
+        break;
+      }
+      case "summarization-step-start": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.currentSession.statusEl.setText("Summarizing");
+        this.pushLog(
+          "Step 2: Summarization started",
+          "Step 2: Summarizing transcription with user prompt",
+          this.currentSession
+        );
+        break;
+      }
+      case "summarization-step-complete": {
+        if (!this.currentSession) {
+          break;
+        }
+        const durationText = formatDuration(e.elapsedMs);
+        this.pushLog(
+          `Step 2: Summarization done: ${durationText}`,
+          `Step 2: Summarization complete: ${durationText}`,
+          this.currentSession
+        );
+        break;
+      }
       case "cancel-requested": {
         if (!this.currentSession) {
           break;

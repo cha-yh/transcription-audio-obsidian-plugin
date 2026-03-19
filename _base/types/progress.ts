@@ -13,6 +13,11 @@ export type ProgressStage =
   | "api-request-retry"
   | "api-request-complete"
   | "api-usage"
+  | "transcription-step-start"
+  | "transcription-step-complete"
+  | "temp-file-created"
+  | "summarization-step-start"
+  | "summarization-step-complete"
   | "cancel-requested"
   | "cancelled"
   | "success"
@@ -45,6 +50,11 @@ export type ProgressEvent =
       toolUsePromptTokenCount?: number;
       totalTokenCount?: number;
     }
+  | { stage: "transcription-step-start" }
+  | { stage: "transcription-step-complete"; elapsedMs: number }
+  | { stage: "temp-file-created"; path: string }
+  | { stage: "summarization-step-start" }
+  | { stage: "summarization-step-complete"; elapsedMs: number }
   | { stage: "cancel-requested" }
   | { stage: "cancelled" }
   | { stage: "success" }

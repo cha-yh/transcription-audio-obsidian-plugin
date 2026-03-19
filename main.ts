@@ -119,7 +119,8 @@ export default class TranscriptionAudioPlugin extends Plugin {
       apiKey,
       prompt,
       this.settings.model,
-      outputTemplate
+      outputTemplate,
+      this.settings.enableTranscribeThenSummarize
     );
   }
 }
@@ -234,6 +235,20 @@ class TranscriptionSettingTab extends PluginSettingTab {
           this.plugin.settings.model = value;
           await this.plugin.saveSettings();
         });
+      });
+
+    new Setting(containerEl)
+      .setName("Transcribe then summarize")
+      .setDesc(
+        "When enabled, audio is first transcribed to raw text, saved to a temporary file, then summarized separately using your prompt. This produces more accurate results by separating transcription from summarization."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.enableTranscribeThenSummarize)
+          .onChange(async (value) => {
+            this.plugin.settings.enableTranscribeThenSummarize = value;
+            await this.plugin.saveSettings();
+          });
       });
 
     if ((this.plugin.settings.mode || "basic") === "basic") {
