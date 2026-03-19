@@ -14,7 +14,11 @@ import { progressBus } from "../_base/utils/progressBus";
 import { ObsidianFileService } from "_base/services/obsidian/obisdianFileService";
 import { AudioService } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
-import { DEFAULT_TRANSCRIPTION_ONLY_PROMPT } from "_base/constants/setting";
+import {
+  DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
+  GENERAL_CATEGORY_ID,
+} from "_base/constants/setting";
+import { TranscriptionCategory } from "_base/types/setting";
 
 const CHUNK_TRANSCRIPTION_PROMPT =
   "Transcribe the following audio. Output only the transcript text for this part, without any extra commentary.";
@@ -38,7 +42,9 @@ export class TranscriptionController {
     prompt: string,
     model: string,
     outputTemplate: string,
-    enableTranscribeThenSummarize: boolean = false
+    enableTranscribeThenSummarize: boolean = false,
+    enableCategoryClassification: boolean = false,
+    categories: TranscriptionCategory[] = []
   ): Promise<void> {
     const currentCursorPosition = editor.getCursor();
     const activeFile = this.app.workspace.getActiveFile();
@@ -449,14 +455,127 @@ export class TranscriptionController {
 
             throwIfCancelled();
 
-            // Step 2: Summarization using transcribed text
+            // Step 2: Classify transcript into a category (or use General)
+            let detectedCategory: string = "";
+            let categoryPrompt: string = "";
+
+            const hasEnabledCategories = categories.some((c) => c.enabled);
+
+            if (!enableCategoryClassification) {
+              // No classification — use General category prompt
+              const generalCat = categories.find(
+                (c) => c.id === GENERAL_CATEGORY_ID
+              );
+              detectedCategory = generalCat?.name || "General";
+              categoryPrompt = generalCat?.prompt || templateModePrompt;
+            } else if (
+              existingTranscript?.category &&
+              hasEnabledCategories
+            ) {
+              // Reuse category from existing transcription file
+              detectedCategory = existingTranscript.category;
+              progressBus.publish({ stage: "classification-step-start" });
+              progressBus.publish({
+                stage: "classification-step-complete",
+                elapsedMs: 0,
+                category: detectedCategory,
+              });
+            } else if (hasEnabledCategories) {
+              const classificationStepStart = performance.now();
+              progressBus.publish({ stage: "classification-step-start" });
+
+              const enabledCategories = categories.filter((c) => c.enabled);
+              const categoryNames = enabledCategories.map((c) => c.name);
+              const classificationResult =
+                await this.transcriptionService.classifyTranscript(
+                  apiKey!,
+                  rawTranscript,
+                  categoryNames,
+                  model,
+                  6 * 60 * 1000,
+                  () => {
+                    progressBus.publish({ stage: "api-request-start" });
+                  },
+                  (apiRequestElapsedMs) => {
+                    progressBus.publish({
+                      stage: "api-request-complete",
+                      elapsedMs: apiRequestElapsedMs,
+                    });
+                  },
+                  abortController.signal
+                );
+
+              publishUsage(classificationResult);
+
+              const aiCategory = classificationResult.text.trim();
+              const matched = categories.find(
+                (c) => c.name.toLowerCase() === aiCategory.toLowerCase()
+              );
+
+              if (matched) {
+                detectedCategory = matched.name;
+              } else {
+                // AI returned something outside configured categories
+                const generalCategory = categories.find(
+                  (c) => c.id === GENERAL_CATEGORY_ID
+                );
+                detectedCategory = generalCategory
+                  ? generalCategory.name
+                  : categories[categories.length - 1].name;
+
+                // Update temp file with AI's guess noted
+                await this.updateTempFileCategory(
+                  filePath,
+                  `${detectedCategory} (AI suggested: ${aiCategory})`
+                );
+              }
+
+              const classificationElapsedMs = Math.round(
+                performance.now() - classificationStepStart
+              );
+              progressBus.publish({
+                stage: "classification-step-complete",
+                elapsedMs: classificationElapsedMs,
+                category: detectedCategory,
+              });
+
+              throwIfCancelled();
+
+              // Write category to temp file if not already written
+              if (matched) {
+                await this.updateTempFileCategory(
+                  filePath,
+                  detectedCategory
+                );
+              }
+            } else {
+              detectedCategory = "";
+            }
+
+            // Resolve prompt: category prompt or fallback to user prompt
+            if (!categoryPrompt) {
+              if (detectedCategory && hasEnabledCategories) {
+                const matchedCategory = categories.find(
+                  (c) =>
+                    c.enabled &&
+                    c.name.toLowerCase() === detectedCategory.toLowerCase()
+                );
+                categoryPrompt = matchedCategory
+                  ? matchedCategory.prompt
+                  : templateModePrompt;
+              } else {
+                categoryPrompt = templateModePrompt;
+              }
+            }
+
+            // Step 3: Summarization using category prompt
             const summarizationStepStart = performance.now();
             progressBus.publish({ stage: "summarization-step-start" });
 
             const summaryResult =
               await this.transcriptionService.summarizeText(
                 apiKey!,
-                templateModePrompt,
+                categoryPrompt,
                 rawTranscript,
                 model,
                 6 * 60 * 1000,
@@ -614,7 +733,7 @@ export class TranscriptionController {
 
   private async findExistingTranscription(
     audioFilePath: string
-  ): Promise<{ path: string; text: string } | null> {
+  ): Promise<{ path: string; text: string; category?: string } | null> {
     const audioName = audioFilePath
       .split("/")
       .pop()
@@ -642,6 +761,13 @@ export class TranscriptionController {
     const file = candidates[0];
     const content = await this.app.vault.read(file);
 
+    // Extract category from frontmatter
+    let category: string | undefined;
+    const categoryMatch = content.match(/^---[\s\S]*?category:\s*(.+)[\s\S]*?---/);
+    if (categoryMatch) {
+      category = categoryMatch[1].trim();
+    }
+
     // Extract transcription text after "## Transcription\n\n"
     const marker = "## Transcription\n\n";
     const markerIndex = content.indexOf(marker);
@@ -650,7 +776,33 @@ export class TranscriptionController {
     const text = content.substring(markerIndex + marker.length).trim();
     if (text.length === 0) return null;
 
-    return { path: file.path, text };
+    return { path: file.path, text, category };
+  }
+
+  private async updateTempFileCategory(
+    audioFilePath: string,
+    category: string
+  ): Promise<void> {
+    const existing = await this.findExistingTranscription(audioFilePath);
+    if (!existing) return;
+
+    const file = this.app.vault.getAbstractFileByPath(existing.path);
+    if (!file || !(file instanceof TFile)) return;
+
+    await this.app.vault.process(file, (data) => {
+      // Check if category already exists in frontmatter
+      if (data.match(/^---[\s\S]*?category:\s*.+[\s\S]*?---/)) {
+        return data.replace(
+          /(category:\s*).+/,
+          `$1${category}`
+        );
+      }
+      // Add category to frontmatter
+      return data.replace(
+        /^(---\n)/,
+        `$1category: ${category}\n`
+      );
+    });
   }
 
   private async createTranscriptionTempFile(

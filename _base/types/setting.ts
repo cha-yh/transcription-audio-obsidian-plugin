@@ -1,5 +1,12 @@
 export type TranscriptionInputMode = "basic" | "template";
 
+export interface TranscriptionCategory {
+  id: string;
+  name: string;
+  prompt: string;
+  enabled: boolean;
+}
+
 export interface AudioPluginSettings {
   mode: TranscriptionInputMode;
   model: string;
@@ -9,4 +16,6 @@ export interface AudioPluginSettings {
   templatePrompt: string;
   outputTemplate: string;
   enableTranscribeThenSummarize: boolean;
+  enableCategoryClassification: boolean;
+  categories: TranscriptionCategory[];
 }

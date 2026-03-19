@@ -16,6 +16,8 @@ export type ProgressStage =
   | "transcription-step-start"
   | "transcription-step-complete"
   | "temp-file-created"
+  | "classification-step-start"
+  | "classification-step-complete"
   | "summarization-step-start"
   | "summarization-step-complete"
   | "cancel-requested"
@@ -53,6 +55,8 @@ export type ProgressEvent =
   | { stage: "transcription-step-start" }
   | { stage: "transcription-step-complete"; elapsedMs: number }
   | { stage: "temp-file-created"; path: string }
+  | { stage: "classification-step-start" }
+  | { stage: "classification-step-complete"; elapsedMs: number; category: string }
   | { stage: "summarization-step-start" }
   | { stage: "summarization-step-complete"; elapsedMs: number }
   | { stage: "cancel-requested" }

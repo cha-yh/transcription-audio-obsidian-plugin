@@ -1,4 +1,7 @@
-import { AudioPluginSettings } from "_base/types/setting";
+import {
+  AudioPluginSettings,
+  TranscriptionCategory,
+} from "_base/types/setting";
 
 export const DEFAULT_BASIC_MODE_PROMPT =
   "You are an expert meeting and research note-taker for Obsidian. Produce a rigorously structured Markdown note from the following audio transcript. Follow this exact structure and rules:\n" +
@@ -78,6 +81,95 @@ export const DEFAULT_TRANSCRIPTION_ONLY_PROMPT =
   "But what about the budget? We haven't checked the numbers yet.\n\n" +
   "Right, let me pull up the spreadsheet and we can review it together.";
 
+const CATEGORY_PROMPT_BASE =
+  "\n\nConstraints:\n" +
+  "- Write as if I am the author. Do not mention \"the speaker\".\n" +
+  "- Be faithful to the transcript; mark uncertain items with [?] rather than inventing facts.\n" +
+  "- Prefer clear headings, bullets, and short paragraphs.\n" +
+  "- Write in the same language as the transcript.\n\n" +
+  "The following is the transcript:\n\n";
+
+export const DEFAULT_CATEGORY_PROMPT_1ON1 =
+  "Produce a structured Markdown note from this 1-on-1 meeting transcript.\n\n" +
+  "## Follow-ups from Last Meeting\n" +
+  "- List items carried over from the previous session and their current status.\n\n" +
+  "## Key Discussion Points\n" +
+  "- Record each topic discussed with who raised it and the outcome.\n\n" +
+  "## Feedback & Coaching\n" +
+  "- Any feedback given or received, mentoring moments, or growth observations.\n\n" +
+  "## Blockers & Concerns\n" +
+  "- Issues blocking progress or personal/professional concerns raised.\n\n" +
+  "## Action Items\n" +
+  "- [ ] Owner — action — due date\n\n" +
+  "## Mood / Sentiment\n" +
+  "- Brief note on overall tone and energy of the conversation." +
+  CATEGORY_PROMPT_BASE;
+
+export const DEFAULT_CATEGORY_PROMPT_TECH_MEETING =
+  "Produce a structured Markdown note from this technical meeting transcript.\n\n" +
+  "## Executive Summary\n" +
+  "- 3–5 bullets of the most important technical outcomes.\n\n" +
+  "## Technical Decisions\n" +
+  "- Each decision with rationale and alternatives considered.\n\n" +
+  "## Architecture & Design\n" +
+  "- Any architecture or design discussions, diagrams described, or patterns chosen.\n\n" +
+  "## Code & Review\n" +
+  "- Code review outcomes, PR references, or implementation details discussed.\n\n" +
+  "## Tech Debt & Risks\n" +
+  "- Technical debt items identified, performance concerns, or infrastructure risks.\n\n" +
+  "## Action Items\n" +
+  "- [ ] Owner — action — due date" +
+  CATEGORY_PROMPT_BASE;
+
+export const DEFAULT_CATEGORY_PROMPT_PROJECT =
+  "Produce a structured Markdown note from this project discussion transcript.\n\n" +
+  "## Project Status\n" +
+  "- Current status of the project, progress against milestones.\n\n" +
+  "## Timeline & Milestones\n" +
+  "- Any changes to timeline, upcoming milestones, or deadline adjustments.\n\n" +
+  "## Risks & Issues\n" +
+  "- Risks identified, blockers, and mitigation strategies discussed.\n\n" +
+  "## Resource & Scope Changes\n" +
+  "- Changes to team allocation, budget, or project scope.\n\n" +
+  "## Stakeholder Feedback\n" +
+  "- Feedback from stakeholders, clients, or cross-team partners.\n\n" +
+  "## Decisions\n" +
+  "- Finalized decisions as a bullet list.\n\n" +
+  "## Action Items\n" +
+  "- [ ] Owner — action — due date" +
+  CATEGORY_PROMPT_BASE;
+
+export const DEFAULT_CATEGORY_PROMPT_GENERAL = DEFAULT_BASIC_MODE_PROMPT;
+
+export const GENERAL_CATEGORY_ID = "general";
+
+export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
+  {
+    id: "1on1",
+    name: "1on1",
+    prompt: DEFAULT_CATEGORY_PROMPT_1ON1,
+    enabled: true,
+  },
+  {
+    id: "tech-meeting",
+    name: "Tech Meeting",
+    prompt: DEFAULT_CATEGORY_PROMPT_TECH_MEETING,
+    enabled: true,
+  },
+  {
+    id: "project-discussion",
+    name: "Project Discussion",
+    prompt: DEFAULT_CATEGORY_PROMPT_PROJECT,
+    enabled: true,
+  },
+  {
+    id: GENERAL_CATEGORY_ID,
+    name: "General",
+    prompt: DEFAULT_CATEGORY_PROMPT_GENERAL,
+    enabled: true,
+  },
+];
+
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
   mode: "basic",
   model: "gemini-3-flash-preview",
@@ -87,6 +179,8 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
   outputTemplate: DEFAULT_OUTPUT_TEMPLATE,
   prompt: DEFAULT_BASIC_MODE_PROMPT,
   enableTranscribeThenSummarize: false,
+  enableCategoryClassification: false,
+  categories: DEFAULT_CATEGORIES,
 };
 
 export const MODELS: string[] = [

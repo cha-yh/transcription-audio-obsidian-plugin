@@ -271,6 +271,67 @@ export class TranscriptionService {
     });
   }
 
+  async classifyTranscript(
+    apiKey: string,
+    transcriptionText: string,
+    categoryNames: string[],
+    model: string,
+    timeoutMs: number = 6 * 60 * 1000,
+    onApiRequestStart?: () => void,
+    onApiRequestComplete?: (elapsedMs: number) => void,
+    abortSignal?: AbortSignal
+  ): Promise<TranscriptionResult> {
+    const categoryList = categoryNames.map((n) => `- ${n}`).join("\n");
+    const prompt =
+      `Classify the following transcript into exactly one of these categories:\n${categoryList}\n\n` +
+      `Rules:\n` +
+      `- Respond with ONLY the category name from the list above.\n` +
+      `- Do not add any explanation, punctuation, or extra text.\n` +
+      `- If the transcript does not clearly fit any category, respond with "General".\n\n` +
+      `Transcript:\n${transcriptionText}`;
+
+    if (!apiKey) {
+      throw new Error("API Key is not provided.");
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey });
+
+      onApiRequestStart?.();
+      const apiRequestStartAt = performance.now();
+
+      const response = await this.raceWithTimeoutAndCancel(
+        ai.models.generateContent({
+          model: model,
+          contents: createUserContent([prompt]),
+          config: { abortSignal },
+        }),
+        timeoutMs,
+        `Classification timed out after ${timeoutMs} ms`,
+        abortSignal
+      );
+
+      if (!response.text) {
+        throw new Error("No text response from model");
+      }
+
+      const text = response.text;
+      const usageInfo = this.extractUsage(response);
+
+      const apiRequestElapsedMs = Math.round(
+        performance.now() - apiRequestStartAt
+      );
+      onApiRequestComplete?.(apiRequestElapsedMs);
+
+      return { text, usage: usageInfo };
+    } catch (error) {
+      if (!isTranscriptionCancelledError(error)) {
+        console.error("Classification failed:", error);
+      }
+      throw error;
+    }
+  }
+
   async summarizeText(
     apiKey: string,
     prompt: string,

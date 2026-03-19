@@ -159,3 +159,20 @@
 .transcription-audio-session:last-child {
   border-bottom: none;
 }
+
+/* Category modal */
+.transcription-audio-modal-prompt-label .setting-item-control {
+  display: none;
+}
+
+.transcription-audio-modal-textarea {
+  width: 100% !important;
+  box-sizing: border-box;
+}
+
+.transcription-audio-modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}

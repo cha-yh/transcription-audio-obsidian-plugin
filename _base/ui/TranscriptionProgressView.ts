@@ -14,6 +14,8 @@ interface TranscriptionSession {
   statusEl: HTMLElement;
   targetFileEl: HTMLAnchorElement;
   modelEl: HTMLElement;
+  categoryRowEl: HTMLElement;
+  categoryEl: HTMLElement;
   chunkWrapEl?: HTMLElement;
   chunkBarEl?: HTMLProgressElement;
   chunkLabelEl?: HTMLElement;
@@ -233,6 +235,14 @@ export class TranscriptionProgressView extends ItemView {
     });
     const modelEl = row5.createEl("span", { text: "-" });
 
+    const row6 = infoEl.createEl("div", { cls: "transcription-audio-row" });
+    row6.createEl("span", {
+      text: "Category: ",
+      cls: "transcription-audio-label",
+    });
+    const categoryEl = row6.createEl("span", { text: "-" });
+    row6.style.display = "none";
+
     // Create log area
     const logEl = newSessionEl.createEl("div", {
       cls: "transcription-audio-log",
@@ -280,6 +290,8 @@ export class TranscriptionProgressView extends ItemView {
       statusEl,
       targetFileEl,
       modelEl,
+      categoryRowEl: row6,
+      categoryEl,
       logEl,
       latestLogEl,
       detailButtonEl,
@@ -668,14 +680,40 @@ export class TranscriptionProgressView extends ItemView {
         );
         break;
       }
+      case "classification-step-start": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.currentSession.statusEl.setText("Classifying");
+        this.pushLog(
+          "Step 2: Classification started",
+          "Step 2: Classifying transcript category",
+          this.currentSession
+        );
+        break;
+      }
+      case "classification-step-complete": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.currentSession.categoryRowEl.style.display = "";
+        this.currentSession.categoryEl.setText(e.category);
+        const durationText = formatDuration(e.elapsedMs);
+        this.pushLog(
+          `Step 2: Category: ${e.category} (${durationText})`,
+          `Step 2: Classification complete: ${e.category} (${durationText})`,
+          this.currentSession
+        );
+        break;
+      }
       case "summarization-step-start": {
         if (!this.currentSession) {
           break;
         }
         this.currentSession.statusEl.setText("Summarizing");
         this.pushLog(
-          "Step 2: Summarization started",
-          "Step 2: Summarizing transcription with user prompt",
+          "Step 3: Summarization started",
+          "Step 3: Summarizing transcription with category prompt",
           this.currentSession
         );
         break;
@@ -686,8 +724,8 @@ export class TranscriptionProgressView extends ItemView {
         }
         const durationText = formatDuration(e.elapsedMs);
         this.pushLog(
-          `Step 2: Summarization done: ${durationText}`,
-          `Step 2: Summarization complete: ${durationText}`,
+          `Step 3: Summarization done: ${durationText}`,
+          `Step 3: Summarization complete: ${durationText}`,
           this.currentSession
         );
         break;
