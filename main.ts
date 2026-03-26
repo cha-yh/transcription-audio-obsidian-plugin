@@ -12,7 +12,10 @@ import {
 import { TranscriptionController } from "./controllers/TranscriptionController";
 import { getProgressViewType } from "./_base/constants/progress";
 import { TranscriptionProgressView } from "./_base/ui/TranscriptionProgressView";
-import { AudioPluginSettings, TranscriptionCategory } from "_base/types/setting";
+import {
+  AudioPluginSettings,
+  TranscriptionCategory,
+} from "_base/types/setting";
 import {
   DEFAULT_SETTINGS,
   MODELS,
@@ -159,9 +162,9 @@ class TranscriptionSettingTab extends PluginSettingTab {
     label: string,
     onReset: () => Promise<void>
   ): void {
-    const controlEl = textAreaEl.closest(".setting-item-control") as
-      | HTMLElement
-      | null;
+    const controlEl = textAreaEl.closest(
+      ".setting-item-control"
+    ) as HTMLElement | null;
     const parentEl = textAreaEl.parentElement;
     if (!controlEl || !parentEl) {
       return;
@@ -183,7 +186,9 @@ class TranscriptionSettingTab extends PluginSettingTab {
   }
 
   private generateCategoryId(): string {
-    return "cat-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    return (
+      "cat-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+    );
   }
 
   private displayCategorySettings(containerEl: HTMLElement): void {
@@ -203,40 +208,46 @@ class TranscriptionSettingTab extends PluginSettingTab {
       const descText = isGeneral
         ? "Default fallback category"
         : isDisabled
-          ? "Prompt required to enable"
-          : "";
+        ? "Prompt required to enable"
+        : "";
 
       const setting = new Setting(containerEl).setName(cat.name);
       if (descText) setting.setDesc(descText);
 
       // Edit button — opens modal
       setting.addExtraButton((btn) => {
-        btn.setIcon("pencil").setTooltip("Edit prompt").onClick(() => {
-          new CategoryEditModal(
-            this.app,
-            cat,
-            isGeneral,
-            DEFAULT_CATEGORIES.find((d) => d.id === cat.id) || null,
-            async () => {
-              await this.plugin.saveSettings();
-              this.display();
-            }
-          ).open();
-        });
+        btn
+          .setIcon("pencil")
+          .setTooltip("Edit prompt")
+          .onClick(() => {
+            new CategoryEditModal(
+              this.app,
+              cat,
+              isGeneral,
+              DEFAULT_CATEGORIES.find((d) => d.id === cat.id) || null,
+              async () => {
+                await this.plugin.saveSettings();
+                this.display();
+              }
+            ).open();
+          });
       });
 
       // Delete button (except General)
       if (!isGeneral) {
         setting.addExtraButton((btn) => {
-          btn.setIcon("trash").setTooltip("Delete category").onClick(async () => {
-            const confirmed = await this.confirmReset(
-              `Delete category "${cat.name}"?`
-            );
-            if (!confirmed) return;
-            this.plugin.settings.categories.splice(i, 1);
-            await this.plugin.saveSettings();
-            this.display();
-          });
+          btn
+            .setIcon("trash")
+            .setTooltip("Delete category")
+            .onClick(async () => {
+              const confirmed = await this.confirmReset(
+                `Delete category "${cat.name}"?`
+              );
+              if (!confirmed) return;
+              this.plugin.settings.categories.splice(i, 1);
+              await this.plugin.saveSettings();
+              this.display();
+            });
         });
       }
     }
@@ -330,7 +341,8 @@ class TranscriptionSettingTab extends PluginSettingTab {
         dropdown.addOptions(MODE_OPTIONS);
         dropdown.setValue(this.plugin.settings.mode || "basic");
         dropdown.onChange(async (value) => {
-          this.plugin.settings.mode = value === "template" ? "template" : "basic";
+          this.plugin.settings.mode =
+            value === "template" ? "template" : "basic";
           await this.plugin.saveSettings();
           this.display();
         });
@@ -438,7 +450,8 @@ class TranscriptionSettingTab extends PluginSettingTab {
           text
             .setPlaceholder(DEFAULT_SETTINGS.templatePrompt)
             .setValue(
-              this.plugin.settings.templatePrompt || DEFAULT_TEMPLATE_MODE_PROMPT
+              this.plugin.settings.templatePrompt ||
+                DEFAULT_TEMPLATE_MODE_PROMPT
             )
             .onChange(async (value) => {
               this.plugin.settings.templatePrompt = value;
@@ -456,7 +469,8 @@ class TranscriptionSettingTab extends PluginSettingTab {
                 return;
               }
 
-              this.plugin.settings.templatePrompt = DEFAULT_TEMPLATE_MODE_PROMPT;
+              this.plugin.settings.templatePrompt =
+                DEFAULT_TEMPLATE_MODE_PROMPT;
               await this.plugin.saveSettings();
               new Notice("Template mode prompt reset to default.");
               this.display();
@@ -475,7 +489,9 @@ class TranscriptionSettingTab extends PluginSettingTab {
           }
           text
             .setPlaceholder(DEFAULT_OUTPUT_TEMPLATE)
-            .setValue(this.plugin.settings.outputTemplate || DEFAULT_OUTPUT_TEMPLATE)
+            .setValue(
+              this.plugin.settings.outputTemplate || DEFAULT_OUTPUT_TEMPLATE
+            )
             .onChange(async (value) => {
               this.plugin.settings.outputTemplate = value;
               await this.plugin.saveSettings();
