@@ -102,6 +102,38 @@
   border-radius: 4px;
 }
 
+.transcription-audio-retry-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.transcription-audio-retry-label {
+  font-size: 12px;
+  color: var(--text-error);
+}
+
+.transcription-audio-retry-button {
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--text-error);
+  background-color: transparent;
+  color: var(--text-error);
+  border-radius: 4px;
+}
+
+.transcription-audio-retry-button:hover:enabled {
+  background-color: var(--text-error);
+  color: var(--text-on-accent);
+}
+
+.transcription-audio-retry-button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
 .transcription-audio-cancel-button:hover:enabled {
   background-color: var(--background-modifier-hover);
 }

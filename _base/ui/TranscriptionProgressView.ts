@@ -610,10 +610,62 @@ export class TranscriptionProgressView extends ItemView {
           break;
         }
         this.pushLog(
-          `Chunk ${e.chunkIndex}/${e.chunkTotal} failed - click detail for more`,
+          `Chunk ${e.chunkIndex}/${e.chunkTotal} failed`,
           `Chunk failed: ${e.chunkIndex}/${e.chunkTotal} - ${e.message}`,
           this.currentSession
         );
+
+        // Add retry button
+        const retryRow = this.currentSession.logEl.createEl("div", {
+          cls: "transcription-audio-retry-row",
+        });
+        retryRow.createEl("span", {
+          text: `Chunk ${e.chunkIndex} failed`,
+          cls: "transcription-audio-retry-label",
+        });
+        const retryBtn = retryRow.createEl("button", {
+          text: "Retry",
+          cls: "transcription-audio-retry-button",
+        });
+        retryBtn.addEventListener("click", () => {
+          retryBtn.disabled = true;
+          retryBtn.setText("Retrying...");
+          progressBus.publish({
+            stage: "chunk-retry-requested",
+            chunkIndex: e.chunkIndex,
+          });
+        });
+        break;
+      }
+      case "chunk-retry-complete": {
+        if (!this.currentSession) {
+          break;
+        }
+        if (e.success) {
+          this.pushLog(
+            `Chunk ${e.chunkIndex}/${e.chunkTotal} retry succeeded`,
+            `Chunk retry succeeded: ${e.chunkIndex}/${e.chunkTotal}`,
+            this.currentSession
+          );
+          if (
+            this.currentSession.chunkBarEl &&
+            this.currentSession.chunkLabelEl
+          ) {
+            this.currentSession.chunkBarEl.value = Math.max(
+              this.currentSession.chunkBarEl.value,
+              e.chunkIndex
+            );
+            this.currentSession.chunkLabelEl.setText(
+              `Chunk ${e.chunkIndex}/${e.chunkTotal} retried`
+            );
+          }
+        } else {
+          this.pushLog(
+            `Chunk ${e.chunkIndex}/${e.chunkTotal} retry failed`,
+            `Chunk retry failed: ${e.chunkIndex}/${e.chunkTotal}`,
+            this.currentSession
+          );
+        }
         break;
       }
       case "file-upload-start": {

@@ -340,6 +340,26 @@ export class TranscriptionController {
 
                 publishUsage(transcriptionResult);
                 rawTranscript = transcriptionResult.text;
+
+                const transcriptionStepElapsedMs = Math.round(
+                  performance.now() - transcriptionStepStart
+                );
+                progressBus.publish({
+                  stage: "transcription-step-complete",
+                  elapsedMs: transcriptionStepElapsedMs,
+                });
+
+                throwIfCancelled();
+
+                const tempFilePath =
+                  await this.createTranscriptionTempFile(
+                    filePath,
+                    rawTranscript
+                  );
+                progressBus.publish({
+                  stage: "temp-file-created",
+                  path: tempFilePath,
+                });
               } else {
                 // 30 minutes or longer: chunk the WAV
 
@@ -349,12 +369,18 @@ export class TranscriptionController {
                   overlapMs: 1500,
                 });
 
-                let combined = "";
-                let chunkIndex = 0;
-                for (const c of chunks) {
+                const FAILED_PLACEHOLDER_PREFIX = "{{CHUNK_FAILED:";
+                const FAILED_PLACEHOLDER_SUFFIX = "}}";
+                const chunkResults: string[] = new Array(chunks.length).fill(
+                  ""
+                );
+                const failedChunkIndices: number[] = [];
+
+                for (let ci = 0; ci < chunks.length; ci++) {
                   throwIfCancelled();
 
-                  chunkIndex++;
+                  const chunkIndex = ci + 1;
+                  const c = chunks[ci];
                   progressBus.publish({
                     stage: "chunk-start",
                     chunkIndex: chunkIndex,
@@ -384,18 +410,26 @@ export class TranscriptionController {
                       const existing =
                         this.app.vault.getAbstractFileByPath(debugPath);
                       if (existing instanceof TFile) {
-                        await this.app.vault.modifyBinary(existing, chunkBuffer);
+                        await this.app.vault.modifyBinary(
+                          existing,
+                          chunkBuffer
+                        );
                       } else {
                         await this.app.vault.createBinary(
                           debugPath,
                           chunkBuffer
                         );
                       }
-                      console.debug(
-                        `[DEBUG] Chunk ${chunkIndex} WAV saved: ${debugPath} (${chunkBuffer.byteLength} bytes)`
-                      );
+                      if (this.isDevMode) {
+                        console.debug(
+                          `[DEBUG] Chunk ${chunkIndex} WAV saved: ${debugPath} (${chunkBuffer.byteLength} bytes)`
+                        );
+                      }
                     } catch (debugErr) {
-                      console.warn("[DEBUG] Failed to save chunk WAV:", debugErr);
+                      console.warn(
+                        "[DEBUG] Failed to save chunk WAV:",
+                        debugErr
+                      );
                     }
                   }
 
@@ -459,10 +493,7 @@ export class TranscriptionController {
                       });
                     }
 
-                    if (combined.length > 0) {
-                      combined += "\n\n";
-                    }
-                    combined += trimmedText;
+                    chunkResults[ci] = trimmedText;
 
                     progressBus.publish({
                       stage: "chunk-complete",
@@ -474,41 +505,64 @@ export class TranscriptionController {
                       throw e;
                     }
 
+                    failedChunkIndices.push(ci);
+                    chunkResults[ci] =
+                      `${FAILED_PLACEHOLDER_PREFIX}${chunkIndex}${FAILED_PLACEHOLDER_SUFFIX}`;
+
                     progressBus.publish({
                       stage: "chunk-failed",
                       chunkIndex: chunkIndex,
                       chunkTotal: chunks.length,
                       message: e?.message || String(e),
                     });
-                    combined +=
-                      `\n\n[[Chunk ${chunkIndex} failed: ${
-                        e?.message || String(e)
-                      }]]`;
                   }
                 }
-                rawTranscript = combined.trim();
-              }
 
-              const transcriptionStepElapsedMs = Math.round(
-                performance.now() - transcriptionStepStart
-              );
-              progressBus.publish({
-                stage: "transcription-step-complete",
-                elapsedMs: transcriptionStepElapsedMs,
-              });
+                // Build transcript and save temp file
+                rawTranscript = chunkResults
+                  .filter((t) => t.length > 0)
+                  .join("\n\n");
 
-              throwIfCancelled();
-
-              // Create temp file with transcription
-              const tempFilePath =
-                await this.createTranscriptionTempFile(
-                  filePath,
-                  rawTranscript
+                const transcriptionStepElapsedMs = Math.round(
+                  performance.now() - transcriptionStepStart
                 );
-              progressBus.publish({
-                stage: "temp-file-created",
-                path: tempFilePath,
-              });
+                progressBus.publish({
+                  stage: "transcription-step-complete",
+                  elapsedMs: transcriptionStepElapsedMs,
+                });
+
+                throwIfCancelled();
+
+                const tempFilePath =
+                  await this.createTranscriptionTempFile(
+                    filePath,
+                    rawTranscript
+                  );
+                progressBus.publish({
+                  stage: "temp-file-created",
+                  path: tempFilePath,
+                });
+
+                // Wait for retries on failed chunks
+                if (failedChunkIndices.length > 0) {
+                  await this.handleChunkRetries(
+                    failedChunkIndices,
+                    chunks,
+                    chunkResults,
+                    wavBuffer,
+                    apiKey!,
+                    model,
+                    tempFilePath,
+                    FAILED_PLACEHOLDER_PREFIX,
+                    FAILED_PLACEHOLDER_SUFFIX
+                  );
+
+                  // Rebuild transcript after retries
+                  rawTranscript = chunkResults
+                    .filter((t) => t.length > 0)
+                    .join("\n\n");
+                }
+              }
             }
 
             throwIfCancelled();
@@ -749,6 +803,120 @@ export class TranscriptionController {
     } finally {
       unsubscribeCancel();
     }
+  }
+
+  private async handleChunkRetries(
+    failedIndices: number[],
+    chunks: { startMs: number; endMs: number }[],
+    chunkResults: string[],
+    wavBuffer: ArrayBuffer,
+    apiKey: string,
+    model: string,
+    tempFilePath: string,
+    placeholderPrefix: string,
+    placeholderSuffix: string
+  ): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const remaining = new Set(failedIndices);
+      let unsubscribe: (() => void) | null = null;
+
+      const finish = () => {
+        if (unsubscribe) unsubscribe();
+        resolve();
+      };
+
+      // Auto-resolve if no retries requested within timeout or all resolved
+      const timeoutId = setTimeout(() => {
+        finish();
+      }, 5 * 60 * 1000);
+
+      unsubscribe = progressBus.subscribe(async (event) => {
+        if (event.stage !== "chunk-retry-requested") return;
+
+        const ci = event.chunkIndex - 1;
+        if (!remaining.has(ci)) return;
+
+        const chunkIndex = event.chunkIndex;
+        const c = chunks[ci];
+
+        progressBus.publish({
+          stage: "chunk-start",
+          chunkIndex: chunkIndex,
+          chunkTotal: chunks.length,
+        });
+
+        try {
+          const chunkBuffer = this.audioService.sliceWavPcm16(
+            wavBuffer,
+            c.startMs,
+            c.endMs
+          );
+          const chunkBase64 =
+            await this.audioService.arrayBufferToBase64Async(chunkBuffer);
+          const result = await this.transcriptionService.transcribe(
+            apiKey,
+            DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
+            chunkBase64,
+            "audio/wav",
+            model,
+            6 * 60 * 1000,
+            () => {
+              progressBus.publish({ stage: "file-upload-start" });
+            },
+            (uploadElapsedMs) => {
+              progressBus.publish({
+                stage: "file-upload-complete",
+                elapsedMs: uploadElapsedMs,
+              });
+            },
+            () => {
+              progressBus.publish({ stage: "api-request-start" });
+            },
+            (apiRequestElapsedMs) => {
+              progressBus.publish({
+                stage: "api-request-complete",
+                elapsedMs: apiRequestElapsedMs,
+              });
+            },
+            undefined,
+            true
+          );
+
+          const trimmedText = result.text.trim();
+          chunkResults[ci] = trimmedText;
+
+          // Replace placeholder in temp file
+          const placeholder = `${placeholderPrefix}${chunkIndex}${placeholderSuffix}`;
+          const file = this.app.vault.getAbstractFileByPath(tempFilePath);
+          if (file instanceof TFile) {
+            await this.app.vault.process(file, (data) => {
+              return data.replace(placeholder, trimmedText);
+            });
+          }
+
+          remaining.delete(ci);
+
+          progressBus.publish({
+            stage: "chunk-retry-complete",
+            chunkIndex: chunkIndex,
+            chunkTotal: chunks.length,
+            success: true,
+          });
+        } catch (e) {
+          progressBus.publish({
+            stage: "chunk-retry-complete",
+            chunkIndex: chunkIndex,
+            chunkTotal: chunks.length,
+            success: false,
+          });
+        }
+
+        if (remaining.size === 0) {
+          clearTimeout(timeoutId);
+          finish();
+        }
+      });
+    });
   }
 
   private async openProgressView(): Promise<void> {
