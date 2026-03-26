@@ -116,6 +116,12 @@
   color: var(--link-color);
   text-decoration: underline;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  max-width: 200px;
+  vertical-align: bottom;
 }
 
 .transcription-audio-target-link:hover,

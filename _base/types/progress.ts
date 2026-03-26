@@ -6,6 +6,7 @@ export type ProgressStage =
   | "target-file-selected"
   | "chunk-start"
   | "chunk-complete"
+  | "chunk-short-response"
   | "chunk-failed"
   | "file-upload-start"
   | "file-upload-complete"
@@ -33,6 +34,12 @@ export type ProgressEvent =
   | { stage: "target-file-selected"; path: string; line: number; ch: number }
   | { stage: "chunk-start"; chunkIndex: number; chunkTotal: number }
   | { stage: "chunk-complete"; chunkIndex: number; chunkTotal: number }
+  | {
+      stage: "chunk-short-response";
+      chunkIndex: number;
+      chunkTotal: number;
+      charCount: number;
+    }
   | {
       stage: "chunk-failed";
       chunkIndex: number;

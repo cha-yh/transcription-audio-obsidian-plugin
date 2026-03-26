@@ -1,9 +1,6 @@
 import { ItemView, MarkdownView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import { progressBus } from "../utils/progressBus";
-import {
-  VIEW_ICON,
-  VIEW_TITLE,
-} from "../constants/progress";
+import { VIEW_ICON, VIEW_TITLE } from "../constants/progress";
 import type { ProgressEvent } from "../types/progress";
 import { formatBytes, formatDuration } from "../utils/format";
 
@@ -16,6 +13,9 @@ interface TranscriptionSession {
   modelEl: HTMLElement;
   categoryRowEl: HTMLElement;
   categoryEl: HTMLElement;
+  transcriptRowEl: HTMLElement;
+  transcriptFileEl: HTMLAnchorElement;
+  transcriptPath?: string;
   chunkWrapEl?: HTMLElement;
   chunkBarEl?: HTMLProgressElement;
   chunkLabelEl?: HTMLElement;
@@ -60,7 +60,9 @@ export class TranscriptionProgressView extends ItemView {
       return;
     }
 
-    const abstractFile = this.app.vault.getAbstractFileByPath(session.targetPath);
+    const abstractFile = this.app.vault.getAbstractFileByPath(
+      session.targetPath
+    );
     if (!(abstractFile instanceof TFile)) {
       new Notice(`Target file not found: ${session.targetPath}`);
       return;
@@ -70,7 +72,9 @@ export class TranscriptionProgressView extends ItemView {
       .getLeavesOfType("markdown")
       .find((leaf) => {
         const view = leaf.view;
-        return view instanceof MarkdownView && view.file?.path === session.targetPath;
+        return (
+          view instanceof MarkdownView && view.file?.path === session.targetPath
+        );
       });
 
     const leaf =
@@ -95,12 +99,30 @@ export class TranscriptionProgressView extends ItemView {
     }
   }
 
+  private async openFileByPath(path: string): Promise<void> {
+    const abstractFile = this.app.vault.getAbstractFileByPath(path);
+    if (!(abstractFile instanceof TFile)) {
+      new Notice(`File not found: ${path}`);
+      return;
+    }
+
+    const leaf =
+      this.app.workspace.getMostRecentLeaf(this.app.workspace.rootSplit) ??
+      this.app.workspace.getLeavesOfType("markdown")[0] ??
+      this.app.workspace.getLeaf(false);
+    await leaf.openFile(abstractFile, { active: true });
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    this.app.workspace.revealLeaf(leaf);
+  }
+
   private async openAudioFile(session: TranscriptionSession): Promise<void> {
     if (!session.audioPath) {
       return;
     }
 
-    const abstractFile = this.app.vault.getAbstractFileByPath(session.audioPath);
+    const abstractFile = this.app.vault.getAbstractFileByPath(
+      session.audioPath
+    );
     if (!(abstractFile instanceof TFile)) {
       new Notice(`Audio file not found: ${session.audioPath}`);
       return;
@@ -243,6 +265,18 @@ export class TranscriptionProgressView extends ItemView {
     const categoryEl = row6.createEl("span", { text: "-" });
     row6.style.display = "none";
 
+    const row7 = infoEl.createEl("div", { cls: "transcription-audio-row" });
+    row7.createEl("span", {
+      text: "Transcript: ",
+      cls: "transcription-audio-label",
+    });
+    const transcriptFileEl = row7.createEl("a", {
+      text: "-",
+      cls: "internal-link transcription-audio-file-link is-disabled",
+    });
+    transcriptFileEl.href = "#";
+    row7.style.display = "none";
+
     // Create log area
     const logEl = newSessionEl.createEl("div", {
       cls: "transcription-audio-log",
@@ -292,6 +326,8 @@ export class TranscriptionProgressView extends ItemView {
       modelEl,
       categoryRowEl: row6,
       categoryEl,
+      transcriptRowEl: row7,
+      transcriptFileEl,
       logEl,
       latestLogEl,
       detailButtonEl,
@@ -329,6 +365,13 @@ export class TranscriptionProgressView extends ItemView {
       }
     });
 
+    transcriptFileEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      if (session.transcriptPath) {
+        void this.openFileByPath(session.transcriptPath);
+      }
+    });
+
     cancelButtonEl.addEventListener("click", () => {
       if (!session.isCancellable) {
         return;
@@ -354,7 +397,10 @@ export class TranscriptionProgressView extends ItemView {
       session.logHistoryEl.style.display = "block";
       session.logHistoryEl.empty();
       session.logHistory.forEach((log) => {
-        session.logHistoryEl.createEl("div", { text: log });
+        const line = session.logHistoryEl.createEl("div", { text: log });
+        if (log.includes("under 50 chars")) {
+          line.style.color = "var(--text-error)";
+        }
       });
       session.detailButtonEl.setText("close");
     } else {
@@ -539,6 +585,26 @@ export class TranscriptionProgressView extends ItemView {
         );
         break;
       }
+      case "chunk-short-response": {
+        if (!this.currentSession) {
+          break;
+        }
+        const warnMsg = `Chunk ${e.chunkIndex}/${e.chunkTotal}: transcription under 50 chars (${e.charCount} chars)`;
+        this.pushLog(
+          `Chunk ${e.chunkIndex}/${e.chunkTotal} short response (${e.charCount} chars)`,
+          warnMsg,
+          this.currentSession
+        );
+        // Add warning to detail log in red
+        if (this.currentSession.isLogExpanded) {
+          const warnLine = this.currentSession.logHistoryEl.createEl("div", {
+            text: warnMsg,
+          });
+          warnLine.style.color = "var(--text-error)";
+          warnLine.scrollIntoView({ block: "end" });
+        }
+        break;
+      }
       case "chunk-failed": {
         if (!this.currentSession) {
           break;
@@ -673,8 +739,13 @@ export class TranscriptionProgressView extends ItemView {
           break;
         }
         const fileName = e.path.split("/").pop() || e.path;
+        this.currentSession.transcriptPath = e.path;
+        this.currentSession.transcriptRowEl.style.display = "";
+        this.currentSession.transcriptFileEl.setText(fileName);
+        this.currentSession.transcriptFileEl.title = e.path;
+        this.currentSession.transcriptFileEl.classList.remove("is-disabled");
         this.pushLog(
-          `Temp file: ${fileName}`,
+          `Transcript: ${fileName}`,
           `Transcription saved to: ${e.path}`,
           this.currentSession
         );

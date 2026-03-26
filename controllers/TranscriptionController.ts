@@ -33,8 +33,11 @@ export class TranscriptionController {
   private transcriptionService: TranscriptionService =
     new TranscriptionService();
   private audioService: AudioService = new AudioService();
+  private isDevMode: boolean;
 
-  constructor(private app: App, private progressViewType: string) {}
+  constructor(private app: App, private progressViewType: string) {
+    this.isDevMode = progressViewType.includes("-test");
+  }
 
   async run(
     editor: Editor,
@@ -269,8 +272,10 @@ export class TranscriptionController {
               const transcriptionStepStart = performance.now();
               progressBus.publish({ stage: "transcription-step-start" });
 
-              // Determine audio duration without full WAV conversion
+              // Decode once to determine duration and get WAV for chunking
               let totalMs: number;
+              let wavBuffer: ArrayBuffer | null = null;
+
               if (this.isPcm16Wav(audioBuffer)) {
                 const header =
                   this.audioService.parseWavHeader(audioBuffer);
@@ -282,9 +287,18 @@ export class TranscriptionController {
                 totalMs = Math.floor(
                   (totalFrames / header.sampleRate) * 1000
                 );
+                wavBuffer = audioBuffer;
               } else {
-                totalMs =
-                  await this.audioService.getAudioDurationMs(audioBuffer);
+                progressBus.publish({ stage: "preparing-audio" });
+                const decoded =
+                  await this.audioService.decodeToWavPcm16(audioBuffer);
+                wavBuffer = decoded.wavBuffer;
+                totalMs = decoded.durationMs;
+                if (this.isDevMode) {
+                  console.debug(
+                    `[DEBUG] WAV decoded: ${wavBuffer.byteLength} bytes, duration: ${totalMs}ms (${Math.round(totalMs / 60000)}min)`
+                  );
+                }
               }
 
               if (totalMs < CHUNK_THRESHOLD_MS) {
@@ -325,15 +339,7 @@ export class TranscriptionController {
                 publishUsage(transcriptionResult);
                 rawTranscript = transcriptionResult.text;
               } else {
-                // 30 minutes or longer: decode to WAV PCM16 and chunk
-                progressBus.publish({ stage: "preparing-audio" });
-                let wavBuffer: ArrayBuffer;
-                if (this.isPcm16Wav(audioBuffer)) {
-                  wavBuffer = audioBuffer;
-                } else {
-                  wavBuffer =
-                    await this.audioService.decodeToWavPcm16(audioBuffer);
-                }
+                // 30 minutes or longer: chunk the WAV
 
                 const chunks = computeTimeBasedChunkRanges({
                   totalMs,
@@ -358,6 +364,38 @@ export class TranscriptionController {
                     c.startMs,
                     c.endMs
                   );
+
+                  // DEBUG (dev mode only): save chunk WAV to vault
+                  if (this.isDevMode) {
+                    try {
+                      const audioName = filePath
+                        .split("/")
+                        .pop()
+                        ?.replace(/\.[^.]+$/, "") || "audio";
+                      const debugDir = filePath.includes("/")
+                        ? filePath.substring(0, filePath.lastIndexOf("/"))
+                        : "";
+                      const debugFileName = `_debug_${audioName}_chunk_${chunkIndex}.wav`;
+                      const debugPath = debugDir
+                        ? `${debugDir}/${debugFileName}`
+                        : debugFileName;
+                      const existing =
+                        this.app.vault.getAbstractFileByPath(debugPath);
+                      if (existing instanceof TFile) {
+                        await this.app.vault.modifyBinary(existing, chunkBuffer);
+                      } else {
+                        await this.app.vault.createBinary(
+                          debugPath,
+                          chunkBuffer
+                        );
+                      }
+                      console.debug(
+                        `[DEBUG] Chunk ${chunkIndex} WAV saved: ${debugPath} (${chunkBuffer.byteLength} bytes)`
+                      );
+                    } catch (debugErr) {
+                      console.warn("[DEBUG] Failed to save chunk WAV:", debugErr);
+                    }
+                  }
 
                   try {
                     const chunkBase64 =
@@ -397,14 +435,31 @@ export class TranscriptionController {
                         abortController.signal
                       );
 
+                    if (this.isDevMode) {
+                      console.debug(
+                        `[DEBUG] Chunk ${chunkIndex} response length: ${result.text.length}, content: ${JSON.stringify(result.text.substring(0, 100))}`
+                      );
+                    }
+
                     publishUsage(result);
 
                     throwIfCancelled();
 
+                    const trimmedText = result.text.trim();
+
+                    if (trimmedText.length < 50) {
+                      progressBus.publish({
+                        stage: "chunk-short-response",
+                        chunkIndex: chunkIndex,
+                        chunkTotal: chunks.length,
+                        charCount: trimmedText.length,
+                      });
+                    }
+
                     if (combined.length > 0) {
                       combined += "\n\n";
                     }
-                    combined += result.text.trim();
+                    combined += trimmedText;
 
                     progressBus.publish({
                       stage: "chunk-complete",

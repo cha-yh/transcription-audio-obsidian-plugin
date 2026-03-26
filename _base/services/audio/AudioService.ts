@@ -161,6 +161,7 @@ export class AudioService {
   async getAudioDurationMs(audioBuffer: ArrayBuffer): Promise<number> {
     const audioContext = new AudioContext();
     try {
+      await audioContext.resume();
       const decodedBuffer = await audioContext.decodeAudioData(
         audioBuffer.slice(0)
       );
@@ -173,12 +174,15 @@ export class AudioService {
   async decodeToWavPcm16(
     audioBuffer: ArrayBuffer,
     targetSampleRate: number = 16000
-  ): Promise<ArrayBuffer> {
+  ): Promise<{ wavBuffer: ArrayBuffer; durationMs: number }> {
     const audioContext = new AudioContext();
     try {
+      await audioContext.resume();
       const decodedBuffer = await audioContext.decodeAudioData(
         audioBuffer.slice(0)
       );
+
+      const durationMs = Math.floor(decodedBuffer.duration * 1000);
 
       const totalSamples = Math.ceil(
         decodedBuffer.duration * targetSampleRate
@@ -197,7 +201,8 @@ export class AudioService {
       const renderedBuffer = await offlineCtx.startRendering();
       const pcmData = renderedBuffer.getChannelData(0);
 
-      return this.createWavFromFloat32Pcm(pcmData, targetSampleRate);
+      const wavBuffer = this.createWavFromFloat32Pcm(pcmData, targetSampleRate);
+      return { wavBuffer, durationMs };
     } finally {
       await audioContext.close();
     }
