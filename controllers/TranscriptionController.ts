@@ -212,7 +212,8 @@ export class TranscriptionController {
                       elapsedMs: apiRequestElapsedMs,
                     });
                   },
-                  abortController.signal
+                  abortController.signal,
+                  true
                 );
 
                 publishUsage(result);
@@ -333,7 +334,8 @@ export class TranscriptionController {
                         elapsedMs: apiRequestElapsedMs,
                       });
                     },
-                    abortController.signal
+                    abortController.signal,
+                    true
                   );
 
                 publishUsage(transcriptionResult);
@@ -432,7 +434,8 @@ export class TranscriptionController {
                             elapsedMs: apiRequestElapsedMs,
                           });
                         },
-                        abortController.signal
+                        abortController.signal,
+                        true
                       );
 
                     if (this.isDevMode) {

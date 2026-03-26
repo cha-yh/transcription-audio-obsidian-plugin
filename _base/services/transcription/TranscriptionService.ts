@@ -402,7 +402,8 @@ export class TranscriptionService {
     onFileUploadComplete?: (elapsedMs: number) => void,
     onApiRequestStart?: () => void,
     onApiRequestComplete?: (elapsedMs: number) => void,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    disableThinking?: boolean
   ): Promise<TranscriptionResult> {
     if (!apiKey) {
       throw new Error("API Key is not provided.");
@@ -452,6 +453,7 @@ export class TranscriptionService {
           ]),
           config: {
             abortSignal,
+            ...(disableThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
           },
         }),
         timeoutMs,
