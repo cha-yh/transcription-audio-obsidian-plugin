@@ -19,6 +19,13 @@ export interface TranscriptionUsage {
 export interface TranscriptionResult {
   text: string;
   usage: TranscriptionUsage;
+  uploadedFile?: UploadedFileInfo;
+}
+
+export interface UploadedFileInfo {
+  uri: string;
+  mimeType: string;
+  expirationTime?: string;
 }
 
 export class TranscriptionCancelledError extends Error {
@@ -118,7 +125,7 @@ export class TranscriptionService {
     mimeType: string,
     timeoutMs: number,
     abortSignal?: AbortSignal
-  ): Promise<{ uri: string; mimeType: string }> {
+  ): Promise<{ uri: string; mimeType: string; expirationTime?: string }> {
     const startResponse = await this.fetchWithTimeoutAndCancel(
       `${RESUMABLE_UPLOAD_ENDPOINT}?key=${encodeURIComponent(apiKey)}`,
       {
@@ -204,6 +211,7 @@ export class TranscriptionService {
         return {
           uri: file.uri,
           mimeType: file.mimeType,
+          expirationTime: file.expirationTime,
         };
       }
 
@@ -403,7 +411,8 @@ export class TranscriptionService {
     onApiRequestStart?: () => void,
     onApiRequestComplete?: (elapsedMs: number) => void,
     abortSignal?: AbortSignal,
-    disableThinking?: boolean
+    disableThinking?: boolean,
+    cachedFile?: UploadedFileInfo
   ): Promise<TranscriptionResult> {
     if (!apiKey) {
       throw new Error("API Key is not provided.");
@@ -412,24 +421,31 @@ export class TranscriptionService {
     try {
       const ai = new GoogleGenAI({ apiKey });
 
-      // convert base64 to Buffer and then to Blob
-      const audioBuffer = Buffer.from(audioBase64, "base64");
-      const audioBlob = new Blob([audioBuffer], {
-        type: mimeType || "application/octet-stream",
-      });
+      let uploadedFile: UploadedFileInfo;
 
-      // upload file to Google Gen AI
-      const uploadStartAt = performance.now();
-      onFileUploadStart?.();
-      const uploadedFile = await this.uploadFileResumable(
-        apiKey,
-        audioBlob,
-        mimeType || "application/octet-stream",
-        timeoutMs,
-        abortSignal
-      );
-      const uploadElapsedMs = Math.round(performance.now() - uploadStartAt);
-      onFileUploadComplete?.(uploadElapsedMs);
+      if (cachedFile) {
+        // Reuse cached file URI — skip upload
+        uploadedFile = cachedFile;
+      } else {
+        // convert base64 to Buffer and then to Blob
+        const audioBuffer = Buffer.from(audioBase64, "base64");
+        const audioBlob = new Blob([audioBuffer], {
+          type: mimeType || "application/octet-stream",
+        });
+
+        // upload file to Google Gen AI
+        const uploadStartAt = performance.now();
+        onFileUploadStart?.();
+        uploadedFile = await this.uploadFileResumable(
+          apiKey,
+          audioBlob,
+          mimeType || "application/octet-stream",
+          timeoutMs,
+          abortSignal
+        );
+        const uploadElapsedMs = Math.round(performance.now() - uploadStartAt);
+        onFileUploadComplete?.(uploadElapsedMs);
+      }
 
       if (!uploadedFile.uri) {
         throw new Error("File upload failed: URI not returned");
@@ -448,7 +464,7 @@ export class TranscriptionService {
         ai.models.generateContent({
           model: model,
           contents: createUserContent([
-            createPartFromUri(uploadedFile.uri!, uploadedFile.mimeType!),
+            createPartFromUri(uploadedFile.uri, uploadedFile.mimeType),
             prompt,
           ]),
           config: {
@@ -477,6 +493,7 @@ export class TranscriptionService {
       return {
         text,
         usage: usageInfo,
+        uploadedFile,
       };
     } catch (error) {
       if (!isTranscriptionCancelledError(error)) {

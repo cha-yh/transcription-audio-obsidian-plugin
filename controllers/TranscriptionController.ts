@@ -5,6 +5,7 @@ import {
   TranscriptionCancelledError,
   TranscriptionService,
   isTranscriptionCancelledError,
+  UploadedFileInfo,
 } from "../_base/services/transcription/TranscriptionService";
 import {
   computeWavChunkRanges,
@@ -374,6 +375,8 @@ export class TranscriptionController {
                 const chunkResults: string[] = new Array(chunks.length).fill(
                   ""
                 );
+                const chunkUploadedFiles: (UploadedFileInfo | null)[] =
+                  new Array(chunks.length).fill(null);
                 const failedChunkIndices: number[] = [];
 
                 for (let ci = 0; ci < chunks.length; ci++) {
@@ -472,9 +475,22 @@ export class TranscriptionController {
                         true
                       );
 
+                    if (result.uploadedFile) {
+                      chunkUploadedFiles[ci] = result.uploadedFile;
+                    }
+
                     if (this.isDevMode) {
                       console.debug(
                         `[DEBUG] Chunk ${chunkIndex} response length: ${result.text.length}, content: ${JSON.stringify(result.text.substring(0, 100))}`
+                      );
+                      console.debug(
+                        `[DEBUG] Chunk ${chunkIndex} uploaded file:`,
+                        {
+                          uri: chunkUploadedFiles[ci]?.uri,
+                          mimeType: chunkUploadedFiles[ci]?.mimeType,
+                          expirationTime: chunkUploadedFiles[ci]?.expirationTime,
+                          valid: this.isUploadedFileValid(chunkUploadedFiles[ci]),
+                        }
                       );
                     }
 
@@ -549,6 +565,7 @@ export class TranscriptionController {
                     failedChunkIndices,
                     chunks,
                     chunkResults,
+                    chunkUploadedFiles,
                     wavBuffer,
                     apiKey!,
                     model,
@@ -914,10 +931,19 @@ export class TranscriptionController {
     });
   }
 
+  private isUploadedFileValid(file: UploadedFileInfo | null): boolean {
+    if (!file?.uri || !file?.mimeType) return false;
+    if (!file.expirationTime) return false;
+    const expiration = new Date(file.expirationTime).getTime();
+    // Consider invalid if less than 1 minute remaining
+    return expiration > Date.now() + 60 * 1000;
+  }
+
   private async handleChunkRetries(
     failedIndices: number[],
     chunks: { startMs: number; endMs: number }[],
     chunkResults: string[],
+    chunkUploadedFiles: (UploadedFileInfo | null)[],
     wavBuffer: ArrayBuffer,
     apiKey: string,
     model: string,
@@ -934,7 +960,6 @@ export class TranscriptionController {
         resolve();
       };
 
-      // Auto-resolve if no retries requested within timeout or all resolved
       const timeoutId = setTimeout(() => {
         finish();
       }, 5 * 60 * 1000);
@@ -955,6 +980,24 @@ export class TranscriptionController {
         });
 
         try {
+          // Check if cached upload is still valid
+          const cachedFile = this.isUploadedFileValid(chunkUploadedFiles[ci])
+            ? chunkUploadedFiles[ci]!
+            : undefined;
+
+          if (this.isDevMode) {
+            console.debug(
+              `[DEBUG] Chunk ${chunkIndex} retry — cached file:`,
+              cachedFile
+                ? {
+                    uri: cachedFile.uri,
+                    expirationTime: cachedFile.expirationTime,
+                    reusing: true,
+                  }
+                : { reusing: false, reason: "expired or missing" }
+            );
+          }
+
           const chunkBuffer = this.audioService.sliceWavPcm16(
             wavBuffer,
             c.startMs,
@@ -988,8 +1031,14 @@ export class TranscriptionController {
               });
             },
             undefined,
-            true
+            true,
+            cachedFile
           );
+
+          // Store new upload info for potential future retries
+          if (result.uploadedFile) {
+            chunkUploadedFiles[ci] = result.uploadedFile;
+          }
 
           const trimmedText = result.text.trim();
           chunkResults[ci] = trimmedText;
