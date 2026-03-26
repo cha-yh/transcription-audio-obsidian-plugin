@@ -434,29 +434,33 @@ export class TranscriptionProgressView extends ItemView {
 
     // Listen for result to re-enable or remove
     const unsubscribe = progressBus.subscribe((event) => {
-      // On success of any step, remove the retry row
+      // Chunk retry result
+      if (event.stage === "chunk-retry-complete") {
+        if (event.success) {
+          retryRow.remove();
+          unsubscribe();
+        } else {
+          retryBtn.disabled = false;
+          retryBtn.setText("Retry");
+        }
+        return;
+      }
+      // Classification/Summarization success — remove retry row
       if (
-        event.stage === "chunk-retry-complete" ||
         event.stage === "classification-step-complete" ||
         event.stage === "summarization-step-complete"
       ) {
         retryRow.remove();
         unsubscribe();
+        return;
       }
-      // On failure again, re-enable the button
+      // Classification/Summarization failure — re-enable retry button
       if (
-        event.stage === "chunk-retry-complete" ||
         event.stage === "classification-step-failed" ||
         event.stage === "summarization-step-failed"
       ) {
-        const isFailed =
-          (event.stage === "chunk-retry-complete" && !event.success) ||
-          event.stage === "classification-step-failed" ||
-          event.stage === "summarization-step-failed";
-        if (isFailed) {
-          retryBtn.disabled = false;
-          retryBtn.setText("Retry");
-        }
+        retryBtn.disabled = false;
+        retryBtn.setText("Retry");
       }
     });
   }
