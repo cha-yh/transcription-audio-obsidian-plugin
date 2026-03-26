@@ -410,6 +410,57 @@ export class TranscriptionProgressView extends ItemView {
     }
   }
 
+  private addRetryButton(
+    session: TranscriptionSession,
+    label: string,
+    onRetry: () => void
+  ): void {
+    const retryRow = session.logEl.createEl("div", {
+      cls: "transcription-audio-retry-row",
+    });
+    retryRow.createEl("span", {
+      text: label,
+      cls: "transcription-audio-retry-label",
+    });
+    const retryBtn = retryRow.createEl("button", {
+      text: "Retry",
+      cls: "transcription-audio-retry-button",
+    });
+    retryBtn.addEventListener("click", () => {
+      retryBtn.disabled = true;
+      retryBtn.setText("Retrying...");
+      onRetry();
+    });
+
+    // Listen for result to re-enable or remove
+    const unsubscribe = progressBus.subscribe((event) => {
+      // On success of any step, remove the retry row
+      if (
+        event.stage === "chunk-retry-complete" ||
+        event.stage === "classification-step-complete" ||
+        event.stage === "summarization-step-complete"
+      ) {
+        retryRow.remove();
+        unsubscribe();
+      }
+      // On failure again, re-enable the button
+      if (
+        event.stage === "chunk-retry-complete" ||
+        event.stage === "classification-step-failed" ||
+        event.stage === "summarization-step-failed"
+      ) {
+        const isFailed =
+          (event.stage === "chunk-retry-complete" && !event.success) ||
+          event.stage === "classification-step-failed" ||
+          event.stage === "summarization-step-failed";
+        if (isFailed) {
+          retryBtn.disabled = false;
+          retryBtn.setText("Retry");
+        }
+      }
+    });
+  }
+
   private updateIndicator(
     session: TranscriptionSession,
     status: "success" | "loading" | "error"
@@ -615,26 +666,16 @@ export class TranscriptionProgressView extends ItemView {
           this.currentSession
         );
 
-        // Add retry button
-        const retryRow = this.currentSession.logEl.createEl("div", {
-          cls: "transcription-audio-retry-row",
-        });
-        retryRow.createEl("span", {
-          text: `Chunk ${e.chunkIndex} failed`,
-          cls: "transcription-audio-retry-label",
-        });
-        const retryBtn = retryRow.createEl("button", {
-          text: "Retry",
-          cls: "transcription-audio-retry-button",
-        });
-        retryBtn.addEventListener("click", () => {
-          retryBtn.disabled = true;
-          retryBtn.setText("Retrying...");
-          progressBus.publish({
-            stage: "chunk-retry-requested",
-            chunkIndex: e.chunkIndex,
-          });
-        });
+        this.addRetryButton(
+          this.currentSession,
+          `Chunk ${e.chunkIndex} failed`,
+          () => {
+            progressBus.publish({
+              stage: "chunk-retry-requested",
+              chunkIndex: e.chunkIndex,
+            });
+          }
+        );
         break;
       }
       case "chunk-retry-complete": {
@@ -850,6 +891,44 @@ export class TranscriptionProgressView extends ItemView {
           `Step 3: Summarization done: ${durationText}`,
           `Step 3: Summarization complete: ${durationText}`,
           this.currentSession
+        );
+        break;
+      }
+      case "classification-step-failed": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.currentSession.statusEl.setText("Classification failed");
+        this.pushLog(
+          "Step 2: Classification failed",
+          `Step 2: Classification failed - ${e.message}`,
+          this.currentSession
+        );
+        this.addRetryButton(
+          this.currentSession,
+          "Classification failed",
+          () => {
+            progressBus.publish({ stage: "classification-retry-requested" });
+          }
+        );
+        break;
+      }
+      case "summarization-step-failed": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.currentSession.statusEl.setText("Summarization failed");
+        this.pushLog(
+          "Step 3: Summarization failed",
+          `Step 3: Summarization failed - ${e.message}`,
+          this.currentSession
+        );
+        this.addRetryButton(
+          this.currentSession,
+          "Summarization failed",
+          () => {
+            progressBus.publish({ stage: "summarization-retry-requested" });
+          }
         );
         break;
       }

@@ -21,8 +21,12 @@ export type ProgressStage =
   | "temp-file-created"
   | "classification-step-start"
   | "classification-step-complete"
+  | "classification-step-failed"
+  | "classification-retry-requested"
   | "summarization-step-start"
   | "summarization-step-complete"
+  | "summarization-step-failed"
+  | "summarization-retry-requested"
   | "cancel-requested"
   | "cancelled"
   | "success"
@@ -73,8 +77,12 @@ export type ProgressEvent =
   | { stage: "temp-file-created"; path: string }
   | { stage: "classification-step-start" }
   | { stage: "classification-step-complete"; elapsedMs: number; category: string }
+  | { stage: "classification-step-failed"; message: string }
+  | { stage: "classification-retry-requested" }
   | { stage: "summarization-step-start" }
   | { stage: "summarization-step-complete"; elapsedMs: number }
+  | { stage: "summarization-step-failed"; message: string }
+  | { stage: "summarization-retry-requested" }
   | { stage: "cancel-requested" }
   | { stage: "cancelled" }
   | { stage: "success" }

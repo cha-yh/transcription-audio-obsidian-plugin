@@ -593,73 +593,15 @@ export class TranscriptionController {
                 category: detectedCategory,
               });
             } else if (hasEnabledCategories) {
-              const classificationStepStart = performance.now();
-              progressBus.publish({ stage: "classification-step-start" });
-
-              const enabledCategories = categories.filter((c) => c.enabled);
-              const categoryNames = enabledCategories.map((c) => c.name);
-              const classificationResult =
-                await this.transcriptionService.classifyTranscript(
-                  apiKey!,
-                  rawTranscript,
-                  categoryNames,
-                  model,
-                  6 * 60 * 1000,
-                  () => {
-                    progressBus.publish({ stage: "api-request-start" });
-                  },
-                  (apiRequestElapsedMs) => {
-                    progressBus.publish({
-                      stage: "api-request-complete",
-                      elapsedMs: apiRequestElapsedMs,
-                    });
-                  },
-                  abortController.signal
-                );
-
-              publishUsage(classificationResult);
-
-              const aiCategory = classificationResult.text.trim();
-              const matched = categories.find(
-                (c) => c.name.toLowerCase() === aiCategory.toLowerCase()
+              detectedCategory = await this.runClassificationWithRetry(
+                apiKey!,
+                rawTranscript,
+                categories,
+                model,
+                filePath,
+                abortController.signal,
+                publishUsage
               );
-
-              if (matched) {
-                detectedCategory = matched.name;
-              } else {
-                // AI returned something outside configured categories
-                const generalCategory = categories.find(
-                  (c) => c.id === GENERAL_CATEGORY_ID
-                );
-                detectedCategory = generalCategory
-                  ? generalCategory.name
-                  : categories[categories.length - 1].name;
-
-                // Update temp file with AI's guess noted
-                await this.updateTempFileCategory(
-                  filePath,
-                  `${detectedCategory} (AI suggested: ${aiCategory})`
-                );
-              }
-
-              const classificationElapsedMs = Math.round(
-                performance.now() - classificationStepStart
-              );
-              progressBus.publish({
-                stage: "classification-step-complete",
-                elapsedMs: classificationElapsedMs,
-                category: detectedCategory,
-              });
-
-              throwIfCancelled();
-
-              // Write category to temp file if not already written
-              if (matched) {
-                await this.updateTempFileCategory(
-                  filePath,
-                  detectedCategory
-                );
-              }
             } else {
               detectedCategory = "";
             }
@@ -681,38 +623,14 @@ export class TranscriptionController {
             }
 
             // Step 3: Summarization using category prompt
-            const summarizationStepStart = performance.now();
-            progressBus.publish({ stage: "summarization-step-start" });
-
-            const summaryResult =
-              await this.transcriptionService.summarizeText(
-                apiKey!,
-                categoryPrompt,
-                rawTranscript,
-                model,
-                6 * 60 * 1000,
-                () => {
-                  progressBus.publish({ stage: "api-request-start" });
-                },
-                (apiRequestElapsedMs) => {
-                  progressBus.publish({
-                    stage: "api-request-complete",
-                    elapsedMs: apiRequestElapsedMs,
-                  });
-                },
-                abortController.signal
-              );
-
-            publishUsage(summaryResult);
-            transcript = summaryResult.text;
-
-            const summarizationStepElapsedMs = Math.round(
-              performance.now() - summarizationStepStart
+            transcript = await this.runSummarizationWithRetry(
+              apiKey!,
+              categoryPrompt,
+              rawTranscript,
+              model,
+              abortController.signal,
+              publishUsage
             );
-            progressBus.publish({
-              stage: "summarization-step-complete",
-              elapsedMs: summarizationStepElapsedMs,
-            });
 
             throwIfCancelled();
           } else {
@@ -803,6 +721,197 @@ export class TranscriptionController {
     } finally {
       unsubscribeCancel();
     }
+  }
+
+  private async runClassificationWithRetry(
+    apiKey: string,
+    rawTranscript: string,
+    categories: TranscriptionCategory[],
+    model: string,
+    filePath: string,
+    abortSignal: AbortSignal,
+    publishUsage: (result: TranscriptionResult) => void
+  ): Promise<string> {
+    const enabledCategories = categories.filter((c) => c.enabled);
+    const categoryNames = enabledCategories.map((c) => c.name);
+
+    const attempt = async (): Promise<string> => {
+      const stepStart = performance.now();
+      progressBus.publish({ stage: "classification-step-start" });
+
+      const result = await this.transcriptionService.classifyTranscript(
+        apiKey,
+        rawTranscript,
+        categoryNames,
+        model,
+        6 * 60 * 1000,
+        () => progressBus.publish({ stage: "api-request-start" }),
+        (ms) =>
+          progressBus.publish({
+            stage: "api-request-complete",
+            elapsedMs: ms,
+          }),
+        abortSignal
+      );
+
+      publishUsage(result);
+
+      const aiCategory = result.text.trim();
+      const matched = categories.find(
+        (c) => c.name.toLowerCase() === aiCategory.toLowerCase()
+      );
+
+      let detectedCategory: string;
+      if (matched) {
+        detectedCategory = matched.name;
+        await this.updateTempFileCategory(filePath, detectedCategory);
+      } else {
+        const generalCategory = categories.find(
+          (c) => c.id === GENERAL_CATEGORY_ID
+        );
+        detectedCategory = generalCategory
+          ? generalCategory.name
+          : categories[categories.length - 1].name;
+        await this.updateTempFileCategory(
+          filePath,
+          `${detectedCategory} (AI suggested: ${aiCategory})`
+        );
+      }
+
+      const elapsedMs = Math.round(performance.now() - stepStart);
+      progressBus.publish({
+        stage: "classification-step-complete",
+        elapsedMs,
+        category: detectedCategory,
+      });
+
+      return detectedCategory;
+    };
+
+    // First attempt
+    try {
+      return await attempt();
+    } catch (e) {
+      if (isTranscriptionCancelledError(e)) throw e;
+
+      progressBus.publish({
+        stage: "classification-step-failed",
+        message: e instanceof Error ? e.message : String(e),
+      });
+
+      // Wait for retry
+      return await this.waitForRetryEvent(
+        "classification-retry-requested",
+        attempt
+      );
+    }
+  }
+
+  private async runSummarizationWithRetry(
+    apiKey: string,
+    categoryPrompt: string,
+    rawTranscript: string,
+    model: string,
+    abortSignal: AbortSignal,
+    publishUsage: (result: TranscriptionResult) => void
+  ): Promise<string> {
+    const attempt = async (): Promise<string> => {
+      const stepStart = performance.now();
+      progressBus.publish({ stage: "summarization-step-start" });
+
+      const result = await this.transcriptionService.summarizeText(
+        apiKey,
+        categoryPrompt,
+        rawTranscript,
+        model,
+        6 * 60 * 1000,
+        () => progressBus.publish({ stage: "api-request-start" }),
+        (ms) =>
+          progressBus.publish({
+            stage: "api-request-complete",
+            elapsedMs: ms,
+          }),
+        abortSignal
+      );
+
+      publishUsage(result);
+
+      const elapsedMs = Math.round(performance.now() - stepStart);
+      progressBus.publish({
+        stage: "summarization-step-complete",
+        elapsedMs,
+      });
+
+      return result.text;
+    };
+
+    // First attempt
+    try {
+      return await attempt();
+    } catch (e) {
+      if (isTranscriptionCancelledError(e)) throw e;
+
+      progressBus.publish({
+        stage: "summarization-step-failed",
+        message: e instanceof Error ? e.message : String(e),
+      });
+
+      return await this.waitForRetryEvent(
+        "summarization-retry-requested",
+        attempt
+      );
+    }
+  }
+
+  private async waitForRetryEvent<T>(
+    eventStage: string,
+    retryFn: () => Promise<T>
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        unsubscribe();
+        reject(new Error(`Retry timeout: no retry requested within 5 minutes`));
+      }, 5 * 60 * 1000);
+
+      const unsubscribe = progressBus.subscribe(async (event) => {
+        if (event.stage !== eventStage) return;
+
+        clearTimeout(timeoutId);
+        unsubscribe();
+
+        try {
+          const result = await retryFn();
+          resolve(result);
+        } catch (retryError) {
+          if (isTranscriptionCancelledError(retryError)) {
+            reject(retryError);
+            return;
+          }
+          // Failed again — publish failure and wait for next retry
+          const failedStage = eventStage.replace(
+            "-retry-requested",
+            "-step-failed"
+          );
+          progressBus.publish({
+            stage: failedStage as any,
+            message:
+              retryError instanceof Error
+                ? retryError.message
+                : String(retryError),
+          });
+
+          try {
+            const nextResult = await this.waitForRetryEvent(
+              eventStage,
+              retryFn
+            );
+            resolve(nextResult);
+          } catch (nextError) {
+            reject(nextError);
+          }
+        }
+      });
+    });
   }
 
   private async handleChunkRetries(
