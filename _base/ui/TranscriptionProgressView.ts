@@ -175,7 +175,7 @@ export class TranscriptionProgressView extends ItemView {
       cls: "transcription-audio-sessions",
     });
 
-    this.registerEvent(progressBus.subscribe((e) => this.onProgress(e)));
+    this.register(progressBus.subscribe((e) => this.onProgress(e)));
   }
 
   private pushLog(
