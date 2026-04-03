@@ -407,7 +407,7 @@ export class TranscriptionService {
     model: string,
     timeoutMs: number = 6 * 60 * 1000,
     onFileUploadStart?: () => void,
-    onFileUploadComplete?: (elapsedMs: number) => void,
+    onFileUploadComplete?: (elapsedMs: number, uploadedFile: UploadedFileInfo) => void,
     onApiRequestStart?: () => void,
     onApiRequestComplete?: (elapsedMs: number) => void,
     abortSignal?: AbortSignal,
@@ -444,7 +444,7 @@ export class TranscriptionService {
           abortSignal
         );
         const uploadElapsedMs = Math.round(performance.now() - uploadStartAt);
-        onFileUploadComplete?.(uploadElapsedMs);
+        onFileUploadComplete?.(uploadElapsedMs, uploadedFile);
       }
 
       if (!uploadedFile.uri) {

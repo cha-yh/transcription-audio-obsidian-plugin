@@ -198,11 +198,21 @@ export class TranscriptionController {
                   () => {
                     progressBus.publish({ stage: "file-upload-start" });
                   },
-                  (uploadElapsedMs) => {
+                  (uploadElapsedMs, uploadedFile) => {
                     progressBus.publish({
                       stage: "file-upload-complete",
                       elapsedMs: uploadElapsedMs,
                     });
+                    if (this.isDevMode) {
+                      console.debug(
+                        `[DEBUG] Chunk ${index} file uploaded:`,
+                        {
+                          uri: uploadedFile.uri,
+                          mimeType: uploadedFile.mimeType,
+                          expirationTime: uploadedFile.expirationTime,
+                        }
+                      );
+                    }
                   },
                   () => {
                     progressBus.publish({ stage: "api-request-start" });
@@ -320,11 +330,21 @@ export class TranscriptionController {
                     () => {
                       progressBus.publish({ stage: "file-upload-start" });
                     },
-                    (uploadElapsedMs) => {
+                    (uploadElapsedMs, uploadedFile) => {
                       progressBus.publish({
                         stage: "file-upload-complete",
                         elapsedMs: uploadElapsedMs,
                       });
+                      if (this.isDevMode) {
+                        console.debug(
+                          `[DEBUG] Single transcription file uploaded:`,
+                          {
+                            uri: uploadedFile.uri,
+                            mimeType: uploadedFile.mimeType,
+                            expirationTime: uploadedFile.expirationTime,
+                          }
+                        );
+                      }
                     },
                     () => {
                       progressBus.publish({ stage: "api-request-start" });
@@ -454,11 +474,22 @@ export class TranscriptionController {
                             stage: "file-upload-start",
                           });
                         },
-                        (uploadElapsedMs) => {
+                        (uploadElapsedMs, uploadedFile) => {
+                          chunkUploadedFiles[ci] = uploadedFile;
                           progressBus.publish({
                             stage: "file-upload-complete",
                             elapsedMs: uploadElapsedMs,
                           });
+                          if (this.isDevMode) {
+                            console.debug(
+                              `[DEBUG] Chunk ${chunkIndex} file uploaded:`,
+                              {
+                                uri: uploadedFile.uri,
+                                mimeType: uploadedFile.mimeType,
+                                expirationTime: uploadedFile.expirationTime,
+                              }
+                            );
+                          }
                         },
                         () => {
                           progressBus.publish({
@@ -475,22 +506,9 @@ export class TranscriptionController {
                         true
                       );
 
-                    if (result.uploadedFile) {
-                      chunkUploadedFiles[ci] = result.uploadedFile;
-                    }
-
                     if (this.isDevMode) {
                       console.debug(
                         `[DEBUG] Chunk ${chunkIndex} response length: ${result.text.length}, content: ${JSON.stringify(result.text.substring(0, 100))}`
-                      );
-                      console.debug(
-                        `[DEBUG] Chunk ${chunkIndex} uploaded file:`,
-                        {
-                          uri: chunkUploadedFiles[ci]?.uri,
-                          mimeType: chunkUploadedFiles[ci]?.mimeType,
-                          expirationTime: chunkUploadedFiles[ci]?.expirationTime,
-                          valid: this.isUploadedFileValid(chunkUploadedFiles[ci]),
-                        }
                       );
                     }
 
@@ -663,11 +681,21 @@ export class TranscriptionController {
               () => {
                 progressBus.publish({ stage: "file-upload-start" });
               },
-              (uploadElapsedMs) => {
+              (uploadElapsedMs, uploadedFile) => {
                 progressBus.publish({
                   stage: "file-upload-complete",
                   elapsedMs: uploadElapsedMs,
                 });
+                if (this.isDevMode) {
+                  console.debug(
+                    `[DEBUG] File uploaded:`,
+                    {
+                      uri: uploadedFile.uri,
+                      mimeType: uploadedFile.mimeType,
+                      expirationTime: uploadedFile.expirationTime,
+                    }
+                  );
+                }
               },
               () => {
                 progressBus.publish({ stage: "api-request-start" });
