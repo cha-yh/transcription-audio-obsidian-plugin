@@ -432,7 +432,7 @@ export class TranscriptionProgressView extends ItemView {
       onRetry();
     });
 
-    // Listen for result to re-enable or remove
+    // Listen for result to re-enable or remove — register for auto-cleanup on view close
     const unsubscribe = progressBus.subscribe((event) => {
       // Chunk retry result
       if (event.stage === "chunk-retry-complete") {
@@ -463,6 +463,7 @@ export class TranscriptionProgressView extends ItemView {
         retryBtn.setText("Retry");
       }
     });
+    this.register(unsubscribe);
   }
 
   private updateIndicator(

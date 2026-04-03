@@ -45,7 +45,6 @@ function canUseSecretComponent(app: App): boolean {
 
 export default class TranscriptionAudioPlugin extends Plugin {
   settings: AudioPluginSettings;
-  writing: boolean = false;
 
   private transcriptionController: TranscriptionController;
   private progressViewType: string;
@@ -74,6 +73,10 @@ export default class TranscriptionAudioPlugin extends Plugin {
     });
 
     this.addSettingTab(new TranscriptionSettingTab(this.app, this));
+  }
+
+  onunload(): void {
+    this.app.workspace.detachLeavesOfType(this.progressViewType);
   }
 
   async loadSettings() {

@@ -12,7 +12,7 @@ import {
   computeTimeBasedChunkRanges,
 } from "../_base/services/transcription/chunking";
 import { progressBus } from "../_base/utils/progressBus";
-import { ObsidianFileService } from "_base/services/obsidian/obisdianFileService";
+import { ObsidianFileService } from "_base/services/obsidian/obsidianFileService";
 import { AudioService } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
 import {
@@ -84,6 +84,7 @@ export class TranscriptionController {
       new Notice(
         "API Key is not configured. Please set it in the plugin settings."
       );
+      return;
     }
 
     let cancelRequested = false;
