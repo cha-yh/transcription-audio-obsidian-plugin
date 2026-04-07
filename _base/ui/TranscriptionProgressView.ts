@@ -35,6 +35,7 @@ interface TranscriptionSession {
   startedAtMs: number;
   chunkTotal: number;
   chunkIndex: number;
+  chunksCompleted: number;
 }
 
 export class TranscriptionProgressView extends ItemView {
@@ -344,6 +345,7 @@ export class TranscriptionProgressView extends ItemView {
       startedAtMs,
       chunkTotal: 0,
       chunkIndex: 0,
+      chunksCompleted: 0,
     };
 
     // Detail button click event - toggle only this session's log
@@ -624,14 +626,16 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
+        this.currentSession.chunksCompleted++;
         if (
           this.currentSession.chunkBarEl &&
           this.currentSession.chunkLabelEl
         ) {
           this.currentSession.chunkBarEl.max = e.chunkTotal;
-          this.currentSession.chunkBarEl.value = e.chunkIndex;
+          this.currentSession.chunkBarEl.value =
+            this.currentSession.chunksCompleted;
           this.currentSession.chunkLabelEl.setText(
-            `Chunk ${e.chunkIndex}/${e.chunkTotal} done`
+            `${this.currentSession.chunksCompleted}/${e.chunkTotal} done`
           );
         }
         this.pushLog(
@@ -688,6 +692,7 @@ export class TranscriptionProgressView extends ItemView {
           break;
         }
         if (e.success) {
+          this.currentSession.chunksCompleted++;
           this.pushLog(
             `Chunk ${e.chunkIndex}/${e.chunkTotal} retry succeeded`,
             `Chunk retry succeeded: ${e.chunkIndex}/${e.chunkTotal}`,
@@ -697,12 +702,10 @@ export class TranscriptionProgressView extends ItemView {
             this.currentSession.chunkBarEl &&
             this.currentSession.chunkLabelEl
           ) {
-            this.currentSession.chunkBarEl.value = Math.max(
-              this.currentSession.chunkBarEl.value,
-              e.chunkIndex
-            );
+            this.currentSession.chunkBarEl.value =
+              this.currentSession.chunksCompleted;
             this.currentSession.chunkLabelEl.setText(
-              `Chunk ${e.chunkIndex}/${e.chunkTotal} retried`
+              `${this.currentSession.chunksCompleted}/${e.chunkTotal} done`
             );
           }
         } else {
