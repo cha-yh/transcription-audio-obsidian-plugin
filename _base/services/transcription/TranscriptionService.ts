@@ -35,6 +35,24 @@ export class TranscriptionCancelledError extends Error {
   }
 }
 
+export class TranscriptionQuotaError extends Error {
+  status: string;
+  detail: string;
+
+  constructor(status: string, message: string) {
+    super(status);
+    this.name = "TranscriptionQuotaError";
+    this.status = status;
+    this.detail = message;
+  }
+}
+
+export function isTranscriptionQuotaError(
+  error: unknown
+): error is TranscriptionQuotaError {
+  return error instanceof TranscriptionQuotaError;
+}
+
 export function isTranscriptionCancelledError(error: unknown): boolean {
   return (
     error instanceof TranscriptionCancelledError ||
@@ -62,6 +80,32 @@ export class TranscriptionService {
       toolUsePromptTokenCount: usage?.toolUsePromptTokenCount,
       totalTokenCount: usage?.totalTokenCount,
     };
+  }
+
+  private wrapApiError(error: unknown): never {
+    if (isTranscriptionCancelledError(error)) throw error;
+    if (isTranscriptionQuotaError(error)) throw error;
+
+    const msg =
+      error instanceof Error ? error.message : String(error);
+
+    // Detect 429 / RESOURCE_EXHAUSTED from Google API
+    if (
+      msg.includes("429") ||
+      msg.includes("RESOURCE_EXHAUSTED") ||
+      msg.includes("quota")
+    ) {
+      // Try to extract structured info
+      const statusMatch = msg.match(
+        /RESOURCE_EXHAUSTED|quota exceeded/i
+      );
+      const status = statusMatch
+        ? "RESOURCE_EXHAUSTED"
+        : "RATE_LIMITED";
+      throw new TranscriptionQuotaError(status, msg);
+    }
+
+    throw error;
   }
 
   private throwIfCancelled(abortSignal?: AbortSignal): void {
@@ -336,7 +380,7 @@ export class TranscriptionService {
       if (!isTranscriptionCancelledError(error)) {
         console.error("Classification failed:", error);
       }
-      throw error;
+      this.wrapApiError(error);
     }
   }
 
@@ -395,7 +439,7 @@ export class TranscriptionService {
       if (!isTranscriptionCancelledError(error)) {
         console.error("Summarization failed:", error);
       }
-      throw error;
+      this.wrapApiError(error);
     }
   }
 
@@ -499,7 +543,7 @@ export class TranscriptionService {
       if (!isTranscriptionCancelledError(error)) {
         console.error("Transcription failed:", error);
       }
-      throw error;
+      this.wrapApiError(error);
     }
   }
 

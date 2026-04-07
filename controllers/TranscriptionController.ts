@@ -5,6 +5,7 @@ import {
   TranscriptionCancelledError,
   TranscriptionService,
   isTranscriptionCancelledError,
+  isTranscriptionQuotaError,
   UploadedFileInfo,
 } from "../_base/services/transcription/TranscriptionService";
 import {
@@ -108,6 +109,23 @@ export class TranscriptionController {
     const templateModePrompt = hasOutputTemplate
       ? `${prompt}\n\nUse the following markdown template exactly when generating output:\n${normalizedTemplate}\n\nRules:\n- Output only the final filled markdown template.\n- Preserve heading order, heading titles, list/checklist style, and section structure exactly.\n- If a section cannot be filled from audio, write N/A.`
       : prompt;
+
+    let pendingTempFilePath: string | null = null;
+
+    const cleanupTempFile = async () => {
+      if (pendingTempFilePath) {
+        const tempFile =
+          this.app.vault.getAbstractFileByPath(pendingTempFilePath);
+        if (tempFile instanceof TFile) {
+          try {
+            await this.app.vault.delete(tempFile);
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        pendingTempFilePath = null;
+      }
+    };
 
     const publishUsage = (result: TranscriptionResult) => {
       progressBus.publish({
@@ -373,9 +391,10 @@ export class TranscriptionController {
                   filePath,
                   rawTranscript
                 );
+                await this.finalizeTranscriptionFile(tempFilePath);
                 progressBus.publish({
                   stage: "temp-file-created",
-                  path: tempFilePath,
+                  path: tempFilePath.replace(/_temp\.md$/, ".md"),
                 });
               } else {
                 // 30 minutes or longer: chunk the WAV
@@ -408,6 +427,7 @@ export class TranscriptionController {
                     filePath,
                     pendingContent
                   );
+                pendingTempFilePath = tempFilePath;
                 progressBus.publish({
                   stage: "temp-file-created",
                   path: tempFilePath,
@@ -437,8 +457,18 @@ export class TranscriptionController {
                   })
                 );
 
-                await Promise.allSettled(chunkPromises);
+                const chunkSettled = await Promise.allSettled(chunkPromises);
                 throwIfCancelled();
+
+                // Check for quota errors — rethrow to cancel entire flow
+                for (const result of chunkSettled) {
+                  if (
+                    result.status === "rejected" &&
+                    isTranscriptionQuotaError(result.reason)
+                  ) {
+                    throw result.reason;
+                  }
+                }
 
                 const transcriptionStepElapsedMs = Math.round(
                   performance.now() - transcriptionStepStart
@@ -469,6 +499,10 @@ export class TranscriptionController {
                 rawTranscript = chunkResults
                   .filter((t) => t.length > 0)
                   .join("\n\n");
+
+                // Finalize: remove _temp from filename
+                await this.finalizeTranscriptionFile(tempFilePath);
+                pendingTempFilePath = null;
               }
             }
 
@@ -593,8 +627,19 @@ export class TranscriptionController {
           progressBus.publish({ stage: "success" });
         } catch (e) {
           if (isTranscriptionCancelledError(e)) {
+            await cleanupTempFile();
             new Notice("Transcription cancelled");
             progressBus.publish({ stage: "cancelled" });
+            return;
+          }
+
+          if (isTranscriptionQuotaError(e)) {
+            await cleanupTempFile();
+            new Notice(e.status);
+            progressBus.publish({
+              stage: "error",
+              message: `${e.status}: ${e.detail}`,
+            });
             return;
           }
 
@@ -610,6 +655,7 @@ export class TranscriptionController {
         }
       } catch (error) {
         if (isTranscriptionCancelledError(error)) {
+          await cleanupTempFile();
           new Notice("Transcription cancelled");
           progressBus.publish({ stage: "cancelled" });
           return;
@@ -621,6 +667,7 @@ export class TranscriptionController {
       }
     } catch (error) {
       if (isTranscriptionCancelledError(error)) {
+        await cleanupTempFile();
         new Notice("Transcription cancelled");
         progressBus.publish({ stage: "cancelled" });
         return;
@@ -704,13 +751,13 @@ export class TranscriptionController {
       return await attempt();
     } catch (e) {
       if (isTranscriptionCancelledError(e)) throw e;
+      if (isTranscriptionQuotaError(e)) throw e;
 
       progressBus.publish({
         stage: "classification-step-failed",
         message: e instanceof Error ? e.message : String(e),
       });
 
-      // Wait for retry
       return await this.waitForRetryEvent(
         "classification-retry-requested",
         attempt
@@ -761,6 +808,7 @@ export class TranscriptionController {
       return await attempt();
     } catch (e) {
       if (isTranscriptionCancelledError(e)) throw e;
+      if (isTranscriptionQuotaError(e)) throw e;
 
       progressBus.publish({
         stage: "summarization-step-failed",
@@ -794,7 +842,10 @@ export class TranscriptionController {
           const result = await retryFn();
           resolve(result);
         } catch (retryError) {
-          if (isTranscriptionCancelledError(retryError)) {
+          if (
+            isTranscriptionCancelledError(retryError) ||
+            isTranscriptionQuotaError(retryError)
+          ) {
             reject(retryError);
             return;
           }
@@ -969,7 +1020,7 @@ export class TranscriptionController {
         chunkTotal,
       });
     } catch (e) {
-      if (isTranscriptionCancelledError(e)) {
+      if (isTranscriptionCancelledError(e) || isTranscriptionQuotaError(e)) {
         throw e;
       }
 
@@ -1193,7 +1244,10 @@ export class TranscriptionController {
           : "";
         const name = f.path.split("/").pop() || "";
         return (
-          dir === audioDir && name.startsWith(prefix) && name.endsWith(".md")
+          dir === audioDir &&
+          name.startsWith(prefix) &&
+          name.endsWith(".md") &&
+          !name.endsWith("_temp.md")
         );
       })
       .sort((a, b) => b.stat.mtime - a.stat.mtime);
@@ -1243,6 +1297,17 @@ export class TranscriptionController {
     });
   }
 
+  private async finalizeTranscriptionFile(
+    tempFilePath: string
+  ): Promise<string> {
+    const finalPath = tempFilePath.replace(/_temp\.md$/, ".md");
+    const file = this.app.vault.getAbstractFileByPath(tempFilePath);
+    if (file instanceof TFile) {
+      await this.app.vault.rename(file, finalPath);
+    }
+    return finalPath;
+  }
+
   private async createTranscriptionTempFile(
     audioFilePath: string,
     transcription: string
@@ -1256,7 +1321,7 @@ export class TranscriptionController {
       .toISOString()
       .replace(/[:.]/g, "-")
       .slice(0, 19);
-    const tempFileName = `_transcription_${audioName}_${timestamp}.md`;
+    const tempFileName = `_transcription_${audioName}_${timestamp}_temp.md`;
 
     const audioDir = audioFilePath.includes("/")
       ? audioFilePath.substring(0, audioFilePath.lastIndexOf("/"))
