@@ -205,14 +205,11 @@ export class TranscriptionController {
                       elapsedMs: uploadElapsedMs,
                     });
                     if (this.isDevMode) {
-                      console.debug(
-                        `[DEBUG] Chunk ${index} file uploaded:`,
-                        {
-                          uri: uploadedFile.uri,
-                          mimeType: uploadedFile.mimeType,
-                          expirationTime: uploadedFile.expirationTime,
-                        }
-                      );
+                      console.debug(`[DEBUG] Chunk ${index} file uploaded:`, {
+                        uri: uploadedFile.uri,
+                        mimeType: uploadedFile.mimeType,
+                        expirationTime: uploadedFile.expirationTime,
+                      });
                     }
                   },
                   () => {
@@ -262,8 +259,9 @@ export class TranscriptionController {
             const CHUNK_DURATION_MS = 20 * 60 * 1000; // 20 minutes
 
             // Check for existing transcription file
-            const existingTranscript =
-              await this.findExistingTranscription(filePath);
+            const existingTranscript = await this.findExistingTranscription(
+              filePath
+            );
 
             let rawTranscript: string;
             if (existingTranscript) {
@@ -290,26 +288,26 @@ export class TranscriptionController {
               let wavBuffer: ArrayBuffer | null = null;
 
               if (this.isPcm16Wav(audioBuffer)) {
-                const header =
-                  this.audioService.parseWavHeader(audioBuffer);
+                const header = this.audioService.parseWavHeader(audioBuffer);
                 const bytesPerFrame =
                   header.numChannels * (header.bitsPerSample / 8);
-                const totalFrames = Math.floor(
-                  header.dataSize / bytesPerFrame
-                );
-                totalMs = Math.floor(
-                  (totalFrames / header.sampleRate) * 1000
-                );
+                const totalFrames = Math.floor(header.dataSize / bytesPerFrame);
+                totalMs = Math.floor((totalFrames / header.sampleRate) * 1000);
                 wavBuffer = audioBuffer;
               } else {
                 progressBus.publish({ stage: "preparing-audio" });
-                const decoded =
-                  await this.audioService.decodeToWavPcm16(audioBuffer);
+                const decoded = await this.audioService.decodeToWavPcm16(
+                  audioBuffer
+                );
                 wavBuffer = decoded.wavBuffer;
                 totalMs = decoded.durationMs;
                 if (this.isDevMode) {
                   console.debug(
-                    `[DEBUG] WAV decoded: ${wavBuffer.byteLength} bytes, duration: ${totalMs}ms (${Math.round(totalMs / 60000)}min)`
+                    `[DEBUG] WAV decoded: ${
+                      wavBuffer.byteLength
+                    } bytes, duration: ${totalMs}ms (${Math.round(
+                      totalMs / 60000
+                    )}min)`
                   );
                 }
               }
@@ -317,9 +315,7 @@ export class TranscriptionController {
               if (totalMs < CHUNK_THRESHOLD_MS) {
                 // Under 30 minutes: single request with original file
                 const audioBase64 =
-                  await this.audioService.arrayBufferToBase64Async(
-                    audioBuffer
-                  );
+                  await this.audioService.arrayBufferToBase64Async(audioBuffer);
                 const transcriptionResult =
                   await this.transcriptionService.transcribe(
                     apiKey!,
@@ -373,11 +369,10 @@ export class TranscriptionController {
 
                 throwIfCancelled();
 
-                const tempFilePath =
-                  await this.createTranscriptionTempFile(
-                    filePath,
-                    rawTranscript
-                  );
+                const tempFilePath = await this.createTranscriptionTempFile(
+                  filePath,
+                  rawTranscript
+                );
                 progressBus.publish({
                   stage: "temp-file-created",
                   path: tempFilePath,
@@ -417,99 +412,62 @@ export class TranscriptionController {
                     c.endMs
                   );
 
-                  // DEBUG (dev mode only): save chunk WAV to vault
-                  if (this.isDevMode) {
-                    try {
-                      const audioName = filePath
-                        .split("/")
-                        .pop()
-                        ?.replace(/\.[^.]+$/, "") || "audio";
-                      const debugDir = filePath.includes("/")
-                        ? filePath.substring(0, filePath.lastIndexOf("/"))
-                        : "";
-                      const debugFileName = `_debug_${audioName}_chunk_${chunkIndex}.wav`;
-                      const debugPath = debugDir
-                        ? `${debugDir}/${debugFileName}`
-                        : debugFileName;
-                      const existing =
-                        this.app.vault.getAbstractFileByPath(debugPath);
-                      if (existing instanceof TFile) {
-                        await this.app.vault.modifyBinary(
-                          existing,
-                          chunkBuffer
-                        );
-                      } else {
-                        await this.app.vault.createBinary(
-                          debugPath,
-                          chunkBuffer
-                        );
-                      }
-                      if (this.isDevMode) {
-                        console.debug(
-                          `[DEBUG] Chunk ${chunkIndex} WAV saved: ${debugPath} (${chunkBuffer.byteLength} bytes)`
-                        );
-                      }
-                    } catch (debugErr) {
-                      console.warn(
-                        "[DEBUG] Failed to save chunk WAV:",
-                        debugErr
-                      );
-                    }
-                  }
-
                   try {
                     const chunkBase64 =
                       await this.audioService.arrayBufferToBase64Async(
                         chunkBuffer
                       );
-                    const result =
-                      await this.transcriptionService.transcribe(
-                        apiKey!,
-                        DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-                        chunkBase64,
-                        "audio/wav",
-                        model,
-                        6 * 60 * 1000,
-                        () => {
-                          progressBus.publish({
-                            stage: "file-upload-start",
-                          });
-                        },
-                        (uploadElapsedMs, uploadedFile) => {
-                          chunkUploadedFiles[ci] = uploadedFile;
-                          progressBus.publish({
-                            stage: "file-upload-complete",
-                            elapsedMs: uploadElapsedMs,
-                          });
-                          if (this.isDevMode) {
-                            console.debug(
-                              `[DEBUG] Chunk ${chunkIndex} file uploaded:`,
-                              {
-                                uri: uploadedFile.uri,
-                                mimeType: uploadedFile.mimeType,
-                                expirationTime: uploadedFile.expirationTime,
-                              }
-                            );
-                          }
-                        },
-                        () => {
-                          progressBus.publish({
-                            stage: "api-request-start",
-                          });
-                        },
-                        (apiRequestElapsedMs) => {
-                          progressBus.publish({
-                            stage: "api-request-complete",
-                            elapsedMs: apiRequestElapsedMs,
-                          });
-                        },
-                        abortController.signal,
-                        true
-                      );
+                    const result = await this.transcriptionService.transcribe(
+                      apiKey!,
+                      DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
+                      chunkBase64,
+                      "audio/wav",
+                      model,
+                      6 * 60 * 1000,
+                      () => {
+                        progressBus.publish({
+                          stage: "file-upload-start",
+                        });
+                      },
+                      (uploadElapsedMs, uploadedFile) => {
+                        chunkUploadedFiles[ci] = uploadedFile;
+                        progressBus.publish({
+                          stage: "file-upload-complete",
+                          elapsedMs: uploadElapsedMs,
+                        });
+                        if (this.isDevMode) {
+                          console.debug(
+                            `[DEBUG] Chunk ${chunkIndex} file uploaded:`,
+                            {
+                              uri: uploadedFile.uri,
+                              mimeType: uploadedFile.mimeType,
+                              expirationTime: uploadedFile.expirationTime,
+                            }
+                          );
+                        }
+                      },
+                      () => {
+                        progressBus.publish({
+                          stage: "api-request-start",
+                        });
+                      },
+                      (apiRequestElapsedMs) => {
+                        progressBus.publish({
+                          stage: "api-request-complete",
+                          elapsedMs: apiRequestElapsedMs,
+                        });
+                      },
+                      abortController.signal,
+                      true
+                    );
 
                     if (this.isDevMode) {
                       console.debug(
-                        `[DEBUG] Chunk ${chunkIndex} response length: ${result.text.length}, content: ${JSON.stringify(result.text.substring(0, 100))}`
+                        `[DEBUG] Chunk ${chunkIndex} response length: ${
+                          result.text.length
+                        }, content: ${JSON.stringify(
+                          result.text.substring(0, 100)
+                        )}`
                       );
                     }
 
@@ -541,8 +499,9 @@ export class TranscriptionController {
                     }
 
                     failedChunkIndices.push(ci);
-                    chunkResults[ci] =
-                      `${FAILED_PLACEHOLDER_PREFIX}${chunkIndex}${FAILED_PLACEHOLDER_SUFFIX}`;
+                    chunkResults[
+                      ci
+                    ] = `${FAILED_PLACEHOLDER_PREFIX}${chunkIndex}${FAILED_PLACEHOLDER_SUFFIX}`;
 
                     progressBus.publish({
                       stage: "chunk-failed",
@@ -568,11 +527,10 @@ export class TranscriptionController {
 
                 throwIfCancelled();
 
-                const tempFilePath =
-                  await this.createTranscriptionTempFile(
-                    filePath,
-                    rawTranscript
-                  );
+                const tempFilePath = await this.createTranscriptionTempFile(
+                  filePath,
+                  rawTranscript
+                );
                 progressBus.publish({
                   stage: "temp-file-created",
                   path: tempFilePath,
@@ -616,10 +574,7 @@ export class TranscriptionController {
               );
               detectedCategory = generalCat?.name || "General";
               categoryPrompt = generalCat?.prompt || templateModePrompt;
-            } else if (
-              existingTranscript?.category &&
-              hasEnabledCategories
-            ) {
+            } else if (existingTranscript?.category && hasEnabledCategories) {
               // Reuse category from existing transcription file
               detectedCategory = existingTranscript.category;
               progressBus.publish({ stage: "classification-step-start" });
@@ -688,14 +643,11 @@ export class TranscriptionController {
                   elapsedMs: uploadElapsedMs,
                 });
                 if (this.isDevMode) {
-                  console.debug(
-                    `[DEBUG] File uploaded:`,
-                    {
-                      uri: uploadedFile.uri,
-                      mimeType: uploadedFile.mimeType,
-                      expirationTime: uploadedFile.expirationTime,
-                    }
-                  );
+                  console.debug(`[DEBUG] File uploaded:`, {
+                    uri: uploadedFile.uri,
+                    mimeType: uploadedFile.mimeType,
+                    expirationTime: uploadedFile.expirationTime,
+                  });
                 }
               },
               () => {
@@ -914,15 +866,15 @@ export class TranscriptionController {
     retryFn: () => Promise<T>
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        unsubscribe();
-        reject(new Error(`Retry timeout: no retry requested within 5 minutes`));
-      }, 5 * 60 * 1000);
-
       const unsubscribe = progressBus.subscribe(async (event) => {
+        if (event.stage === "cancel-requested") {
+          unsubscribe();
+          reject(new TranscriptionCancelledError());
+          return;
+        }
+
         if (event.stage !== eventStage) return;
 
-        clearTimeout(timeoutId);
         unsubscribe();
 
         try {
@@ -980,7 +932,7 @@ export class TranscriptionController {
     placeholderPrefix: string,
     placeholderSuffix: string
   ): Promise<void> {
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
       const remaining = new Set(failedIndices);
       let unsubscribe: (() => void) | null = null;
 
@@ -989,11 +941,13 @@ export class TranscriptionController {
         resolve();
       };
 
-      const timeoutId = setTimeout(() => {
-        finish();
-      }, 5 * 60 * 1000);
-
       unsubscribe = progressBus.subscribe(async (event) => {
+        if (event.stage === "cancel-requested") {
+          if (unsubscribe) unsubscribe();
+          reject(new TranscriptionCancelledError());
+          return;
+        }
+
         if (event.stage !== "chunk-retry-requested") return;
 
         const ci = event.chunkIndex - 1;
@@ -1032,8 +986,9 @@ export class TranscriptionController {
             c.startMs,
             c.endMs
           );
-          const chunkBase64 =
-            await this.audioService.arrayBufferToBase64Async(chunkBuffer);
+          const chunkBase64 = await this.audioService.arrayBufferToBase64Async(
+            chunkBuffer
+          );
           const result = await this.transcriptionService.transcribe(
             apiKey,
             DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
@@ -1099,7 +1054,6 @@ export class TranscriptionController {
         }
 
         if (remaining.size === 0) {
-          clearTimeout(timeoutId);
           finish();
         }
       });
@@ -1147,10 +1101,11 @@ export class TranscriptionController {
   private async findExistingTranscription(
     audioFilePath: string
   ): Promise<{ path: string; text: string; category?: string } | null> {
-    const audioName = audioFilePath
-      .split("/")
-      .pop()
-      ?.replace(/\.[^.]+$/, "") || "";
+    const audioName =
+      audioFilePath
+        .split("/")
+        .pop()
+        ?.replace(/\.[^.]+$/, "") || "";
     if (!audioName) return null;
 
     const audioDir = audioFilePath.includes("/")
@@ -1165,7 +1120,9 @@ export class TranscriptionController {
           ? f.path.substring(0, f.path.lastIndexOf("/"))
           : "";
         const name = f.path.split("/").pop() || "";
-        return dir === audioDir && name.startsWith(prefix) && name.endsWith(".md");
+        return (
+          dir === audioDir && name.startsWith(prefix) && name.endsWith(".md")
+        );
       })
       .sort((a, b) => b.stat.mtime - a.stat.mtime);
 
@@ -1176,7 +1133,9 @@ export class TranscriptionController {
 
     // Extract category from frontmatter
     let category: string | undefined;
-    const categoryMatch = content.match(/^---[\s\S]*?category:\s*(.+)[\s\S]*?---/);
+    const categoryMatch = content.match(
+      /^---[\s\S]*?category:\s*(.+)[\s\S]*?---/
+    );
     if (categoryMatch) {
       category = categoryMatch[1].trim();
     }
@@ -1205,16 +1164,10 @@ export class TranscriptionController {
     await this.app.vault.process(file, (data) => {
       // Check if category already exists in frontmatter
       if (data.match(/^---[\s\S]*?category:\s*.+[\s\S]*?---/)) {
-        return data.replace(
-          /(category:\s*).+/,
-          `$1${category}`
-        );
+        return data.replace(/(category:\s*).+/, `$1${category}`);
       }
       // Add category to frontmatter
-      return data.replace(
-        /^(---\n)/,
-        `$1category: ${category}\n`
-      );
+      return data.replace(/^(---\n)/, `$1category: ${category}\n`);
     });
   }
 
@@ -1222,10 +1175,11 @@ export class TranscriptionController {
     audioFilePath: string,
     transcription: string
   ): Promise<string> {
-    const audioName = audioFilePath
-      .split("/")
-      .pop()
-      ?.replace(/\.[^.]+$/, "") || "audio";
+    const audioName =
+      audioFilePath
+        .split("/")
+        .pop()
+        ?.replace(/\.[^.]+$/, "") || "audio";
     const timestamp = new Date()
       .toISOString()
       .replace(/[:.]/g, "-")
