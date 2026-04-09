@@ -9,3 +9,5 @@ main.js
 .DS_Store
 
 .yarn/install-state.gz
+
+coverage
