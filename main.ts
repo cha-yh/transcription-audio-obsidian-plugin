@@ -142,6 +142,7 @@ export default class TranscriptionAudioPlugin extends Plugin {
       this.settings.model,
       outputTemplate,
       this.settings.enableTranscribeThenSummarize,
+      this.settings.transcriptionOnly,
       this.settings.enableCategoryClassification,
       this.settings.categories
     );
@@ -385,26 +386,49 @@ class TranscriptionSettingTab extends PluginSettingTab {
 
     if (this.plugin.settings.enableTranscribeThenSummarize) {
       new Setting(containerEl)
-        .setName("Category classification")
+        .setName("Transcription only")
         .setDesc(
-          "When enabled, AI classifies each transcript into a category and uses that category's prompt. When disabled, the General category prompt is used for all transcripts."
+          "When enabled, only the raw transcript is produced and inserted. Classification and summarization steps are skipped entirely."
         )
         .addToggle((toggle) => {
           toggle
-            .setValue(this.plugin.settings.enableCategoryClassification)
+            .setValue(this.plugin.settings.transcriptionOnly)
             .onChange(async (value) => {
-              this.plugin.settings.enableCategoryClassification = value;
+              this.plugin.settings.transcriptionOnly = value;
               await this.plugin.saveSettings();
               this.display();
             });
         });
 
-      if (this.plugin.settings.enableCategoryClassification) {
-        this.displayCategorySettings(containerEl);
+      if (!this.plugin.settings.transcriptionOnly) {
+        new Setting(containerEl)
+          .setName("Category classification")
+          .setDesc(
+            "When enabled, AI classifies each transcript into a category and uses that category's prompt. When disabled, the General category prompt is used for all transcripts."
+          )
+          .addToggle((toggle) => {
+            toggle
+              .setValue(this.plugin.settings.enableCategoryClassification)
+              .onChange(async (value) => {
+                this.plugin.settings.enableCategoryClassification = value;
+                await this.plugin.saveSettings();
+                this.display();
+              });
+          });
+
+        if (this.plugin.settings.enableCategoryClassification) {
+          this.displayCategorySettings(containerEl);
+        }
       }
     }
 
-    if ((this.plugin.settings.mode || "basic") === "basic") {
+    const hidePromptSettings =
+      this.plugin.settings.enableTranscribeThenSummarize &&
+      this.plugin.settings.transcriptionOnly;
+
+    if (hidePromptSettings) {
+      // Transcription-only mode: no prompt or template needed
+    } else if ((this.plugin.settings.mode || "basic") === "basic") {
       new Setting(containerEl)
         .setName("Custom transcription-to-notes prompt")
         .setDesc(

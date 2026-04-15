@@ -179,6 +179,7 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
   outputTemplate: DEFAULT_OUTPUT_TEMPLATE,
   prompt: DEFAULT_BASIC_MODE_PROMPT,
   enableTranscribeThenSummarize: false,
+  transcriptionOnly: false,
   enableCategoryClassification: false,
   categories: DEFAULT_CATEGORIES,
 };

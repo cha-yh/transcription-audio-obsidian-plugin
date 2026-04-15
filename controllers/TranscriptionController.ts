@@ -48,6 +48,7 @@ export class TranscriptionController {
     model: string,
     outputTemplate: string,
     enableTranscribeThenSummarize: boolean = false,
+    transcriptionOnly: boolean = false,
     enableCategoryClassification: boolean = false,
     categories: TranscriptionCategory[] = []
   ): Promise<void> {
@@ -503,10 +504,19 @@ export class TranscriptionController {
                 // Finalize: remove _temp from filename
                 await this.finalizeTranscriptionFile(tempFilePath);
                 pendingTempFilePath = null;
+                progressBus.publish({
+                  stage: "temp-file-created",
+                  path: tempFilePath.replace(/_temp\.md$/, ".md"),
+                });
               }
             }
 
             throwIfCancelled();
+
+            // Transcription-only mode: skip classification and summarization
+            if (transcriptionOnly) {
+              transcript = rawTranscript;
+            } else {
 
             // Step 2: Classify transcript into a category (or use General)
             let detectedCategory: string = "";
@@ -571,6 +581,8 @@ export class TranscriptionController {
             );
 
             throwIfCancelled();
+
+            } // end if (!transcriptionOnly)
           } else {
             const audioBase64 =
               await this.audioService.arrayBufferToBase64Async(audioBuffer);

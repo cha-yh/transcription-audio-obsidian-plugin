@@ -16,6 +16,7 @@ export interface AudioPluginSettings {
   templatePrompt: string;
   outputTemplate: string;
   enableTranscribeThenSummarize: boolean;
+  transcriptionOnly: boolean;
   enableCategoryClassification: boolean;
   categories: TranscriptionCategory[];
 }
