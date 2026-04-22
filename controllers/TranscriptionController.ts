@@ -283,7 +283,9 @@ export class TranscriptionController {
             );
 
             let rawTranscript: string;
+            let transcriptionFilePath: string | null = null;
             if (existingTranscript) {
+              transcriptionFilePath = existingTranscript.path;
               // Skip transcription step, use existing file
               progressBus.publish({
                 stage: "transcription-step-start",
@@ -393,9 +395,10 @@ export class TranscriptionController {
                   rawTranscript
                 );
                 await this.finalizeTranscriptionFile(tempFilePath);
+                transcriptionFilePath = tempFilePath.replace(/_temp\.md$/, ".md");
                 progressBus.publish({
                   stage: "temp-file-created",
-                  path: tempFilePath.replace(/_temp\.md$/, ".md"),
+                  path: transcriptionFilePath,
                 });
               } else {
                 // 30 minutes or longer: chunk the WAV
@@ -504,18 +507,24 @@ export class TranscriptionController {
                 // Finalize: remove _temp from filename
                 await this.finalizeTranscriptionFile(tempFilePath);
                 pendingTempFilePath = null;
+                transcriptionFilePath = tempFilePath.replace(/_temp\.md$/, ".md");
                 progressBus.publish({
                   stage: "temp-file-created",
-                  path: tempFilePath.replace(/_temp\.md$/, ".md"),
+                  path: transcriptionFilePath,
                 });
               }
             }
 
             throwIfCancelled();
 
+            // Build transcription file link
+            const transcriptionLink = transcriptionFilePath
+              ? `![[${transcriptionFilePath.split("/").pop()}]]`
+              : "";
+
             // Transcription-only mode: skip classification and summarization
             if (transcriptionOnly) {
-              transcript = rawTranscript;
+              transcript = transcriptionLink;
             } else {
 
             // Step 2: Classify transcript into a category (or use General)
@@ -571,7 +580,7 @@ export class TranscriptionController {
             }
 
             // Step 3: Summarization using category prompt
-            transcript = await this.runSummarizationWithRetry(
+            const summarized = await this.runSummarizationWithRetry(
               apiKey!,
               categoryPrompt,
               rawTranscript,
@@ -581,6 +590,10 @@ export class TranscriptionController {
             );
 
             throwIfCancelled();
+
+            transcript = transcriptionLink
+              ? `${transcriptionLink}\n\n${summarized}`
+              : summarized;
 
             } // end if (!transcriptionOnly)
           } else {
