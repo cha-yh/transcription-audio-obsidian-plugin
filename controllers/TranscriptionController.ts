@@ -519,7 +519,7 @@ export class TranscriptionController {
 
             // Build transcription file link
             const transcriptionLink = transcriptionFilePath
-              ? `![[${transcriptionFilePath.split("/").pop()}]]`
+              ? `[[${transcriptionFilePath.split("/").pop()}]]`
               : "";
 
             // Transcription-only mode: skip classification and summarization
