@@ -173,7 +173,6 @@ export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
   mode: "basic",
   model: "gemini-3-flash-preview",
-  apiKey: "",
   secretApiKeyName: "",
   templatePrompt: DEFAULT_TEMPLATE_MODE_PROMPT,
   outputTemplate: DEFAULT_OUTPUT_TEMPLATE,

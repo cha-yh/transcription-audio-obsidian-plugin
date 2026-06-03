@@ -3,7 +3,7 @@
 ## Initialization
 
 - User invokes the "Transcribe audio" command while the cursor is in a Markdown note
-- Plugin resolves the API key: SecretStorage is checked first, then falls back to the legacy plain-text key
+- Plugin resolves the API key from the selected Obsidian SecretStorage entry
 - The prompt and output template are selected based on the configured mode (basic or template)
 - `TranscriptionController.run()` is called with the editor context, resolved API key, prompt, model, output template, and feature flags
 

@@ -35,6 +35,10 @@ const MODE_OPTIONS: Record<string, string> = {
   template: "Template mode (prompt + template)",
 };
 
+type SavedAudioPluginSettings = Partial<AudioPluginSettings> & {
+  apiKey?: string;
+};
+
 function canUseSecretStorage(app: App): boolean {
   return typeof app.secretStorage?.getSecret === "function";
 }
@@ -87,9 +91,15 @@ export default class TranscriptionAudioPlugin extends Plugin {
 
   async loadSettings() {
     const savedSettings = (await this.loadData()) as
-      | Partial<AudioPluginSettings>
+      | SavedAudioPluginSettings
       | null;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
+    const { apiKey: deprecatedApiKey, ...settingsWithoutDeprecatedApiKey } =
+      savedSettings ?? {};
+    this.settings = Object.assign(
+      {},
+      DEFAULT_SETTINGS,
+      settingsWithoutDeprecatedApiKey
+    );
 
     const savedCategories: TranscriptionCategory[] =
       savedSettings && Array.isArray(savedSettings.categories)
@@ -98,7 +108,7 @@ export default class TranscriptionAudioPlugin extends Plugin {
     this.settings.categories = cloneCategories(
       savedCategories.length > 0 ? savedCategories : DEFAULT_CATEGORIES
     );
-    let shouldSaveSettings = false;
+    let shouldSaveSettings = deprecatedApiKey !== undefined;
 
     const previousModel = this.settings.model;
     const migratedModel = MODEL_MIGRATIONS[previousModel] || previousModel;
@@ -130,17 +140,14 @@ export default class TranscriptionAudioPlugin extends Plugin {
   }
 
   async commandGenerateTranscript(editor: Editor) {
-    const secretApiKey =
+    const apiKey =
       this.settings.secretApiKeyName && canUseSecretStorage(this.app)
         ? this.app.secretStorage?.getSecret(this.settings.secretApiKeyName) ??
-          null
-        : null;
-    const apiKey = secretApiKey || this.settings.apiKey;
+          undefined
+        : undefined;
 
     if (!canUseSecretStorage(this.app) && this.settings.secretApiKeyName) {
-      new Notice(
-        `${SECRET_STORAGE_VERSION_MESSAGE} Falling back to deprecated API key.`
-      );
+      new Notice(SECRET_STORAGE_VERSION_MESSAGE);
     }
 
     const selectedMode = this.settings.mode || "basic";
@@ -340,21 +347,6 @@ class TranscriptionSettingTab extends PluginSettingTab {
             .setDisabled(true);
         });
     }
-
-    new Setting(containerEl)
-      .setName("API key (deprecated, not recommended)")
-      .setDesc("Legacy plain-text API key. Used only as fallback.")
-      .addText((text) => {
-        // mask input
-        text.inputEl.type = "password";
-        text
-          .setPlaceholder("Enter your API key")
-          .setValue(this.plugin.settings.apiKey)
-          .onChange(async (value) => {
-            this.plugin.settings.apiKey = value;
-            await this.plugin.saveSettings();
-          });
-      });
 
     new Setting(containerEl)
       .setName("Transcription mode")

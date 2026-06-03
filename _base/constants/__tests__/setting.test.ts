@@ -18,7 +18,6 @@ describe("DEFAULT_SETTINGS", () => {
   it("has all required fields", () => {
     expect(DEFAULT_SETTINGS).toHaveProperty("mode");
     expect(DEFAULT_SETTINGS).toHaveProperty("model");
-    expect(DEFAULT_SETTINGS).toHaveProperty("apiKey");
     expect(DEFAULT_SETTINGS).toHaveProperty("secretApiKeyName");
     expect(DEFAULT_SETTINGS).toHaveProperty("templatePrompt");
     expect(DEFAULT_SETTINGS).toHaveProperty("outputTemplate");
@@ -30,7 +29,6 @@ describe("DEFAULT_SETTINGS", () => {
 
   it("has valid default values", () => {
     expect(DEFAULT_SETTINGS.mode).toBe("basic");
-    expect(DEFAULT_SETTINGS.apiKey).toBe("");
     expect(DEFAULT_SETTINGS.enableTranscribeThenSummarize).toBe(false);
     expect(DEFAULT_SETTINGS.enableCategoryClassification).toBe(false);
   });

@@ -32,7 +32,6 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 Open Settings → Transcription Audio:
 
 - API Key (SecretStorage, recommended): Select the secret name from Obsidian SecretStorage
-- API Key (deprecated, not recommended): Legacy plain-text API key field kept for backward compatibility fallback
 - On older Obsidian versions, SecretStorage is disabled and you will see an update-required message (Obsidian 1.11.4+)
 - Transcription mode:
   - Basic mode (default): prompt only
@@ -77,7 +76,6 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 
 - **SecretStorage API key support**
   - Added Obsidian SecretStorage-based API key selection (recommended)
-  - Kept legacy plain-text API key as fallback for backward compatibility
 - **Cancelable transcription flow**
   - Added cancel control in the progress panel
   - Improved cancellation handling for upload/request steps
