@@ -529,19 +529,15 @@ export class TranscriptionController {
               transcript = transcriptionLink;
             } else {
 
-            // Step 2: Classify transcript into a category (or use General)
+            // Step 2: Classify transcript into a category when enabled
             let detectedCategory: string = "";
             let categoryPrompt: string = "";
 
             const hasEnabledCategories = categories.some((c) => c.enabled);
 
             if (!enableCategoryClassification) {
-              // No classification — use General category prompt
-              const generalCat = categories.find(
-                (c) => c.id === GENERAL_CATEGORY_ID
-              );
-              detectedCategory = generalCat?.name || "General";
-              categoryPrompt = generalCat?.prompt || templateModePrompt;
+              // No classification — use the prompt selected by settings
+              categoryPrompt = templateModePrompt;
             } else if (existingTranscript?.category && hasEnabledCategories) {
               // Reuse category from existing transcription file
               detectedCategory = existingTranscript.category;

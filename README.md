@@ -34,12 +34,14 @@ Open Settings → Transcription Audio:
 - API Key: Select the API key to use
 - On older Obsidian versions, API key storage is disabled and you will see an update-required message (Obsidian 1.11.4+)
 - Transcription mode:
-  - Basic mode (default): prompt only
-  - Template mode: dedicated prompt + output template (both prefilled with defaults)
+  - Prompt only mode (default): sends audio directly with the configured prompt
+  - Transcription mode: transcribes audio first, then summarizes the raw transcript
+  - Transcription only mode: creates the raw transcript and skips summarization
 - Model: Select a Gemini-compatible model (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.5-flash`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
-- Prompt: Customize the instruction for the selected mode
-- Output template: Available in template mode to enforce a consistent final markdown structure
+- Prompt: Customize the instruction for Prompt only mode
+- Template prompt: Available in Prompt only mode to enforce a consistent final markdown structure
+- Category classification: Available in Transcription mode. When disabled, the same Prompt/Template prompt settings are used for all transcripts.
 
 ## Usage
 
@@ -61,7 +63,7 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 ### Version 0.5.0
 
 - **Transcription mode enhancements**
-  - Added Template mode so prompt and output template can be configured separately
+  - Added Template prompt support so prompt and output template can be configured separately
 - **Gemini 3 Pro Preview migration**
   - Added automatic migration from `gemini-3-pro-preview` to `gemini-3.1-pro-preview`
   - Updated related settings and documentation for current model options

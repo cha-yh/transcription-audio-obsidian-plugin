@@ -174,11 +174,10 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
   mode: "basic",
   model: "gemini-3-flash-preview",
   secretApiKeyName: "",
+  enableTemplatePrompt: false,
   templatePrompt: DEFAULT_TEMPLATE_MODE_PROMPT,
   outputTemplate: DEFAULT_OUTPUT_TEMPLATE,
   prompt: DEFAULT_BASIC_MODE_PROMPT,
-  enableTranscribeThenSummarize: false,
-  transcriptionOnly: false,
   enableCategoryClassification: false,
   categories: DEFAULT_CATEGORIES,
 };

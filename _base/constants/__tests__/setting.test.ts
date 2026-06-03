@@ -19,17 +19,24 @@ describe("DEFAULT_SETTINGS", () => {
     expect(DEFAULT_SETTINGS).toHaveProperty("mode");
     expect(DEFAULT_SETTINGS).toHaveProperty("model");
     expect(DEFAULT_SETTINGS).toHaveProperty("secretApiKeyName");
+    expect(DEFAULT_SETTINGS).toHaveProperty("enableTemplatePrompt");
     expect(DEFAULT_SETTINGS).toHaveProperty("templatePrompt");
     expect(DEFAULT_SETTINGS).toHaveProperty("outputTemplate");
     expect(DEFAULT_SETTINGS).toHaveProperty("prompt");
-    expect(DEFAULT_SETTINGS).toHaveProperty("enableTranscribeThenSummarize");
     expect(DEFAULT_SETTINGS).toHaveProperty("enableCategoryClassification");
     expect(DEFAULT_SETTINGS).toHaveProperty("categories");
   });
 
+  it("does not expose deprecated transcription toggle fields", () => {
+    expect(DEFAULT_SETTINGS).not.toHaveProperty(
+      "enableTranscribeThenSummarize"
+    );
+    expect(DEFAULT_SETTINGS).not.toHaveProperty("transcriptionOnly");
+  });
+
   it("has valid default values", () => {
     expect(DEFAULT_SETTINGS.mode).toBe("basic");
-    expect(DEFAULT_SETTINGS.enableTranscribeThenSummarize).toBe(false);
+    expect(DEFAULT_SETTINGS.enableTemplatePrompt).toBe(false);
     expect(DEFAULT_SETTINGS.enableCategoryClassification).toBe(false);
   });
 

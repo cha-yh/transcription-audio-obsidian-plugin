@@ -15,6 +15,7 @@ import { TranscriptionProgressView } from "./_base/ui/TranscriptionProgressView"
 import {
   AudioPluginSettings,
   TranscriptionCategory,
+  TranscriptionInputMode,
 } from "_base/types/setting";
 import {
   DEFAULT_SETTINGS,
@@ -31,12 +32,21 @@ const SECRET_STORAGE_VERSION_MESSAGE =
   "Secure API key storage requires Obsidian 1.11.4+. Please update Obsidian to use this field.";
 
 const MODE_OPTIONS: Record<string, string> = {
-  basic: "Basic mode (prompt only)",
-  template: "Template mode (prompt + template)",
+  basic: "Prompt only mode",
+  transcription: "Transcription mode",
+  "transcription-only": "Transcription only mode",
 };
 
-type SavedAudioPluginSettings = Partial<AudioPluginSettings> & {
+type LegacyTranscriptionInputMode = TranscriptionInputMode | "template";
+
+type SavedAudioPluginSettings = Omit<
+  Partial<AudioPluginSettings>,
+  "mode"
+> & {
+  mode?: LegacyTranscriptionInputMode;
   apiKey?: string;
+  enableTranscribeThenSummarize?: boolean;
+  transcriptionOnly?: boolean;
 };
 
 function canUseSecretStorage(app: App): boolean {
@@ -51,6 +61,16 @@ function cloneCategories(
   categories: TranscriptionCategory[]
 ): TranscriptionCategory[] {
   return categories.map((category) => ({ ...category }));
+}
+
+function isTranscriptionInputMode(
+  mode: LegacyTranscriptionInputMode | undefined
+): mode is TranscriptionInputMode {
+  return (
+    mode === "basic" ||
+    mode === "transcription" ||
+    mode === "transcription-only"
+  );
 }
 
 export default class TranscriptionAudioPlugin extends Plugin {
@@ -93,12 +113,17 @@ export default class TranscriptionAudioPlugin extends Plugin {
     const savedSettings = (await this.loadData()) as
       | SavedAudioPluginSettings
       | null;
-    const { apiKey: deprecatedApiKey, ...settingsWithoutDeprecatedApiKey } =
-      savedSettings ?? {};
+    const {
+      apiKey: deprecatedApiKey,
+      mode: savedMode,
+      enableTranscribeThenSummarize: deprecatedTranscribeThenSummarize,
+      transcriptionOnly: deprecatedTranscriptionOnly,
+      ...settingsWithoutDeprecatedFields
+    } = savedSettings ?? {};
     this.settings = Object.assign(
       {},
       DEFAULT_SETTINGS,
-      settingsWithoutDeprecatedApiKey
+      settingsWithoutDeprecatedFields
     );
 
     const savedCategories: TranscriptionCategory[] =
@@ -108,7 +133,27 @@ export default class TranscriptionAudioPlugin extends Plugin {
     this.settings.categories = cloneCategories(
       savedCategories.length > 0 ? savedCategories : DEFAULT_CATEGORIES
     );
-    let shouldSaveSettings = deprecatedApiKey !== undefined;
+    let shouldSaveSettings =
+      deprecatedApiKey !== undefined ||
+      deprecatedTranscribeThenSummarize !== undefined ||
+      deprecatedTranscriptionOnly !== undefined ||
+      savedMode === "template";
+
+    if (savedMode === "template") {
+      this.settings.enableTemplatePrompt = true;
+    }
+
+    if (deprecatedTranscribeThenSummarize || deprecatedTranscriptionOnly) {
+      this.settings.mode = deprecatedTranscriptionOnly
+        ? "transcription-only"
+        : "transcription";
+    } else if (savedMode === "template") {
+      this.settings.mode = "basic";
+    } else if (isTranscriptionInputMode(savedMode)) {
+      this.settings.mode = savedMode;
+    } else {
+      this.settings.mode = DEFAULT_SETTINGS.mode;
+    }
 
     const previousModel = this.settings.model;
     const migratedModel = MODEL_MIGRATIONS[previousModel] || previousModel;
@@ -151,14 +196,21 @@ export default class TranscriptionAudioPlugin extends Plugin {
     }
 
     const selectedMode = this.settings.mode || "basic";
-    const prompt =
-      selectedMode === "template"
-        ? this.settings.templatePrompt || DEFAULT_TEMPLATE_MODE_PROMPT
-        : this.settings.prompt;
-    const outputTemplate =
-      selectedMode === "template"
-        ? this.settings.outputTemplate || DEFAULT_OUTPUT_TEMPLATE
-        : "";
+    const usePromptSettings =
+      selectedMode === "basic" ||
+      (selectedMode === "transcription" &&
+        !this.settings.enableCategoryClassification);
+    const useTemplatePrompt =
+      usePromptSettings && this.settings.enableTemplatePrompt;
+    const prompt = useTemplatePrompt
+      ? this.settings.templatePrompt || DEFAULT_TEMPLATE_MODE_PROMPT
+      : this.settings.prompt;
+    const outputTemplate = useTemplatePrompt
+      ? this.settings.outputTemplate || DEFAULT_OUTPUT_TEMPLATE
+      : "";
+    const enableTranscribeThenSummarize =
+      selectedMode === "transcription" || selectedMode === "transcription-only";
+    const transcriptionOnly = selectedMode === "transcription-only";
 
     await this.transcriptionController.run(
       editor,
@@ -166,8 +218,8 @@ export default class TranscriptionAudioPlugin extends Plugin {
       prompt,
       this.settings.model,
       outputTemplate,
-      this.settings.enableTranscribeThenSummarize,
-      this.settings.transcriptionOnly,
+      enableTranscribeThenSummarize,
+      transcriptionOnly,
       this.settings.enableCategoryClassification,
       this.settings.categories
     );
@@ -321,6 +373,139 @@ class TranscriptionSettingTab extends PluginSettingTab {
       });
   }
 
+  private displayPromptOnlySettings(containerEl: HTMLElement): void {
+    new Setting(containerEl)
+      .setName("Template prompt")
+      .setDesc(
+        "Use a dedicated prompt and markdown template for the final output."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.enableTemplatePrompt)
+          .onChange(async (value) => {
+            this.plugin.settings.enableTemplatePrompt = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    if (this.plugin.settings.enableTemplatePrompt) {
+      new Setting(containerEl)
+        .setName("Template prompt instructions")
+        .setDesc(
+          "Prompt used with the output template for deterministic note generation guidance."
+        )
+        .addTextArea((text) => {
+          if (text.inputEl) {
+            text.inputEl.classList.add("transcription-audio-setting-text-area");
+          }
+          text
+            .setPlaceholder(DEFAULT_SETTINGS.templatePrompt)
+            .setValue(
+              this.plugin.settings.templatePrompt ||
+                DEFAULT_TEMPLATE_MODE_PROMPT
+            )
+            .onChange(async (value) => {
+              this.plugin.settings.templatePrompt = value;
+              await this.plugin.saveSettings();
+            });
+
+          this.addInlineResetButton(
+            text.inputEl,
+            "Reset to default",
+            async () => {
+              const confirmed = await this.confirmReset(
+                "Reset the template prompt to its default value?"
+              );
+              if (!confirmed) {
+                return;
+              }
+
+              this.plugin.settings.templatePrompt =
+                DEFAULT_TEMPLATE_MODE_PROMPT;
+              await this.plugin.saveSettings();
+              new Notice("Template prompt reset to default.");
+              this.display();
+            }
+          );
+        });
+
+      new Setting(containerEl)
+        .setName("Output template")
+        .setDesc(
+          "Final output is formatted to this markdown template for consistency."
+        )
+        .addTextArea((text) => {
+          if (text.inputEl) {
+            text.inputEl.classList.add("transcription-audio-setting-text-area");
+          }
+          text
+            .setPlaceholder(DEFAULT_OUTPUT_TEMPLATE)
+            .setValue(
+              this.plugin.settings.outputTemplate || DEFAULT_OUTPUT_TEMPLATE
+            )
+            .onChange(async (value) => {
+              this.plugin.settings.outputTemplate = value;
+              await this.plugin.saveSettings();
+            });
+
+          this.addInlineResetButton(
+            text.inputEl,
+            "Reset to default",
+            async () => {
+              const confirmed = await this.confirmReset(
+                "Reset the output template to its default value?"
+              );
+              if (!confirmed) {
+                return;
+              }
+
+              this.plugin.settings.outputTemplate = DEFAULT_OUTPUT_TEMPLATE;
+              await this.plugin.saveSettings();
+              new Notice("Output template reset to default.");
+              this.display();
+            }
+          );
+        });
+    } else {
+      new Setting(containerEl)
+        .setName("Prompt")
+        .setDesc(
+          "Prompt that will be sent to the AI right before adding your transcribed audio"
+        )
+        .addTextArea((text) => {
+          if (text.inputEl) {
+            text.inputEl.classList.add("transcription-audio-setting-text-area");
+          }
+          text
+            .setPlaceholder(DEFAULT_SETTINGS.prompt)
+            .setValue(this.plugin.settings.prompt)
+            .onChange(async (value) => {
+              this.plugin.settings.prompt = value;
+              await this.plugin.saveSettings();
+            });
+
+          this.addInlineResetButton(
+            text.inputEl,
+            "Reset to default",
+            async () => {
+              const confirmed = await this.confirmReset(
+                "Reset the Prompt only mode prompt to its default value?"
+              );
+              if (!confirmed) {
+                return;
+              }
+
+              this.plugin.settings.prompt = DEFAULT_BASIC_MODE_PROMPT;
+              await this.plugin.saveSettings();
+              new Notice("Prompt reset to default.");
+              this.display();
+            }
+          );
+        });
+    }
+  }
+
   display(): void {
     let { containerEl } = this;
     containerEl.empty();
@@ -367,191 +552,45 @@ class TranscriptionSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Transcription mode")
-      .setDesc("Choose how output instructions are provided.")
+      .setDesc("Choose how audio is processed.")
       .addDropdown((dropdown) => {
         dropdown.addOptions(MODE_OPTIONS);
         dropdown.setValue(this.plugin.settings.mode || "basic");
         dropdown.onChange(async (value) => {
           this.plugin.settings.mode =
-            value === "template" ? "template" : "basic";
+            value === "transcription" || value === "transcription-only"
+              ? value
+              : "basic";
           await this.plugin.saveSettings();
           this.display();
         });
       });
 
-    new Setting(containerEl)
-      .setName("Transcribe then summarize")
-      .setDesc(
-        "When enabled, audio is first transcribed to raw text, saved to a temporary file, then summarized separately using your prompt. This produces more accurate results by separating transcription from summarization."
-      )
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.enableTranscribeThenSummarize)
-          .onChange(async (value) => {
-            this.plugin.settings.enableTranscribeThenSummarize = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
-
-    if (this.plugin.settings.enableTranscribeThenSummarize) {
+    if (this.plugin.settings.mode === "transcription-only") {
+      // Transcription-only mode: no prompt or template needed
+    } else if ((this.plugin.settings.mode || "basic") === "basic") {
+      this.displayPromptOnlySettings(containerEl);
+    } else {
       new Setting(containerEl)
-        .setName("Transcription only")
+        .setName("Category classification")
         .setDesc(
-          "When enabled, only the raw transcript is produced and inserted. Classification and summarization steps are skipped entirely."
+          "When enabled, AI classifies each transcript into a category and uses that category's prompt. When disabled, prompt settings below are used for all transcripts."
         )
         .addToggle((toggle) => {
           toggle
-            .setValue(this.plugin.settings.transcriptionOnly)
+            .setValue(this.plugin.settings.enableCategoryClassification)
             .onChange(async (value) => {
-              this.plugin.settings.transcriptionOnly = value;
+              this.plugin.settings.enableCategoryClassification = value;
               await this.plugin.saveSettings();
               this.display();
             });
         });
 
-      if (!this.plugin.settings.transcriptionOnly) {
-        new Setting(containerEl)
-          .setName("Category classification")
-          .setDesc(
-            "When enabled, AI classifies each transcript into a category and uses that category's prompt. When disabled, the General category prompt is used for all transcripts."
-          )
-          .addToggle((toggle) => {
-            toggle
-              .setValue(this.plugin.settings.enableCategoryClassification)
-              .onChange(async (value) => {
-                this.plugin.settings.enableCategoryClassification = value;
-                await this.plugin.saveSettings();
-                this.display();
-              });
-          });
-
-        if (this.plugin.settings.enableCategoryClassification) {
-          this.displayCategorySettings(containerEl);
-        }
+      if (this.plugin.settings.enableCategoryClassification) {
+        this.displayCategorySettings(containerEl);
+      } else {
+        this.displayPromptOnlySettings(containerEl);
       }
-    }
-
-    const hidePromptSettings =
-      this.plugin.settings.enableTranscribeThenSummarize &&
-      this.plugin.settings.transcriptionOnly;
-
-    if (hidePromptSettings) {
-      // Transcription-only mode: no prompt or template needed
-    } else if ((this.plugin.settings.mode || "basic") === "basic") {
-      new Setting(containerEl)
-        .setName("Custom transcription-to-notes prompt")
-        .setDesc(
-          "Prompt that will be sent to the AI right before adding your transcribed audio"
-        )
-        .addTextArea((text) => {
-          if (text.inputEl) {
-            text.inputEl.classList.add("transcription-audio-setting-text-area");
-          }
-          text
-            .setPlaceholder(DEFAULT_SETTINGS.prompt)
-            .setValue(this.plugin.settings.prompt)
-            .onChange(async (value) => {
-              this.plugin.settings.prompt = value;
-              await this.plugin.saveSettings();
-            });
-
-          this.addInlineResetButton(
-            text.inputEl,
-            "Reset to default",
-            async () => {
-              const confirmed = await this.confirmReset(
-                "Reset the basic mode prompt to its default value?"
-              );
-              if (!confirmed) {
-                return;
-              }
-
-              this.plugin.settings.prompt = DEFAULT_BASIC_MODE_PROMPT;
-              await this.plugin.saveSettings();
-              new Notice("Basic mode prompt reset to default.");
-              this.display();
-            }
-          );
-        });
-    } else {
-      new Setting(containerEl)
-        .setName("Template mode prompt")
-        .setDesc(
-          "Prompt used in template mode for deterministic note generation guidance."
-        )
-        .addTextArea((text) => {
-          if (text.inputEl) {
-            text.inputEl.classList.add("transcription-audio-setting-text-area");
-          }
-          text
-            .setPlaceholder(DEFAULT_SETTINGS.templatePrompt)
-            .setValue(
-              this.plugin.settings.templatePrompt ||
-                DEFAULT_TEMPLATE_MODE_PROMPT
-            )
-            .onChange(async (value) => {
-              this.plugin.settings.templatePrompt = value;
-              await this.plugin.saveSettings();
-            });
-
-          this.addInlineResetButton(
-            text.inputEl,
-            "Reset to default",
-            async () => {
-              const confirmed = await this.confirmReset(
-                "Reset the template mode prompt to its default value?"
-              );
-              if (!confirmed) {
-                return;
-              }
-
-              this.plugin.settings.templatePrompt =
-                DEFAULT_TEMPLATE_MODE_PROMPT;
-              await this.plugin.saveSettings();
-              new Notice("Template mode prompt reset to default.");
-              this.display();
-            }
-          );
-        });
-
-      new Setting(containerEl)
-        .setName("Output template")
-        .setDesc(
-          "Template mode only. Final output is formatted to this markdown template for consistency."
-        )
-        .addTextArea((text) => {
-          if (text.inputEl) {
-            text.inputEl.classList.add("transcription-audio-setting-text-area");
-          }
-          text
-            .setPlaceholder(DEFAULT_OUTPUT_TEMPLATE)
-            .setValue(
-              this.plugin.settings.outputTemplate || DEFAULT_OUTPUT_TEMPLATE
-            )
-            .onChange(async (value) => {
-              this.plugin.settings.outputTemplate = value;
-              await this.plugin.saveSettings();
-            });
-
-          this.addInlineResetButton(
-            text.inputEl,
-            "Reset to default",
-            async () => {
-              const confirmed = await this.confirmReset(
-                "Reset the output template to its default value?"
-              );
-              if (!confirmed) {
-                return;
-              }
-
-              this.plugin.settings.outputTemplate = DEFAULT_OUTPUT_TEMPLATE;
-              await this.plugin.saveSettings();
-              new Notice("Output template reset to default.");
-              this.display();
-            }
-          );
-        });
     }
   }
 }
