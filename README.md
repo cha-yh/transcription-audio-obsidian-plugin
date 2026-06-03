@@ -25,14 +25,14 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 2. Navigate to "Community plugins" and click "Browse"
 3. Search for "Transcription Audio" and click Install
 4. Enable the plugin in Community plugins
-5. Set up your API key in plugin settings (SecretStorage recommended)
+5. Set up your API key in plugin settings
 
 ## Configuration
 
 Open Settings → Transcription Audio:
 
-- API Key (SecretStorage, recommended): Select the secret name from Obsidian SecretStorage
-- On older Obsidian versions, SecretStorage is disabled and you will see an update-required message (Obsidian 1.11.4+)
+- API Key: Select the API key to use
+- On older Obsidian versions, API key storage is disabled and you will see an update-required message (Obsidian 1.11.4+)
 - Transcription mode:
   - Basic mode (default): prompt only
   - Template mode: dedicated prompt + output template (both prefilled with defaults)
@@ -74,8 +74,8 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 
 ### Version 0.4.0
 
-- **SecretStorage API key support**
-  - Added Obsidian SecretStorage-based API key selection (recommended)
+- **Secure API key support**
+  - Added Obsidian API key selection
 - **Cancelable transcription flow**
   - Added cancel control in the progress panel
   - Improved cancellation handling for upload/request steps

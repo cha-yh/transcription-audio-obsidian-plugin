@@ -28,7 +28,7 @@ import {
 } from "_base/constants/setting";
 
 const SECRET_STORAGE_VERSION_MESSAGE =
-  "SecretStorage requires Obsidian 1.11.4+. Please update Obsidian to use this field.";
+  "Secure API key storage requires Obsidian 1.11.4+. Please update Obsidian to use this field.";
 
 const MODE_OPTIONS: Record<string, string> = {
   basic: "Basic mode (prompt only)",
@@ -327,8 +327,8 @@ class TranscriptionSettingTab extends PluginSettingTab {
 
     if (canUseSecretComponent(this.app)) {
       const secretSetting = new Setting(containerEl)
-        .setName("API key (SecretStorage, recommended)")
-        .setDesc("Select a secret key name from Obsidian SecretStorage");
+        .setName("API key")
+        .setDesc("Select the API key to use.");
 
       new SecretComponent(this.app, secretSetting.controlEl)
         .setValue(this.plugin.settings.secretApiKeyName)
@@ -338,29 +338,15 @@ class TranscriptionSettingTab extends PluginSettingTab {
         });
     } else {
       new Setting(containerEl)
-        .setName("API key (SecretStorage, recommended)")
+        .setName("API key")
         .setDesc(SECRET_STORAGE_VERSION_MESSAGE)
         .addText((text) => {
           text
-            .setPlaceholder("Update Obsidian to enable SecretStorage")
+            .setPlaceholder("Update Obsidian to enable API key storage")
             .setValue(this.plugin.settings.secretApiKeyName)
             .setDisabled(true);
         });
     }
-
-    new Setting(containerEl)
-      .setName("Transcription mode")
-      .setDesc("Choose how output instructions are provided.")
-      .addDropdown((dropdown) => {
-        dropdown.addOptions(MODE_OPTIONS);
-        dropdown.setValue(this.plugin.settings.mode || "basic");
-        dropdown.onChange(async (value) => {
-          this.plugin.settings.mode =
-            value === "template" ? "template" : "basic";
-          await this.plugin.saveSettings();
-          this.display();
-        });
-      });
 
     new Setting(containerEl)
       .setName("Model")
@@ -376,6 +362,20 @@ class TranscriptionSettingTab extends PluginSettingTab {
         dropdown.onChange(async (value) => {
           this.plugin.settings.model = value;
           await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Transcription mode")
+      .setDesc("Choose how output instructions are provided.")
+      .addDropdown((dropdown) => {
+        dropdown.addOptions(MODE_OPTIONS);
+        dropdown.setValue(this.plugin.settings.mode || "basic");
+        dropdown.onChange(async (value) => {
+          this.plugin.settings.mode =
+            value === "template" ? "template" : "basic";
+          await this.plugin.saveSettings();
+          this.display();
         });
       });
 
