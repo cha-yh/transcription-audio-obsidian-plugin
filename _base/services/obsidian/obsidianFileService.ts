@@ -1,4 +1,4 @@
-import { App, TAbstractFile } from "obsidian";
+import { App } from "obsidian";
 
 export class ObsidianFileService {
   constructor(private app: App) {}
@@ -15,8 +15,7 @@ export class ObsidianFileService {
     }
     if (filename === "") throw new Error("No file found in the text.");
     const fullPath = filename;
-    const fileExists =
-      this.app.vault.getAbstractFileByPath(fullPath) instanceof TAbstractFile;
+    const fileExists = this.app.vault.getAbstractFileByPath(fullPath) != null;
     if (fileExists) return fullPath;
     const allFiles = this.app.vault.getFiles();
     const foundFile = allFiles.find(

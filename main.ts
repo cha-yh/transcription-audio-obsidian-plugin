@@ -43,6 +43,12 @@ function canUseSecretComponent(app: App): boolean {
   return typeof SecretComponent === "function" && canUseSecretStorage(app);
 }
 
+function cloneCategories(
+  categories: TranscriptionCategory[]
+): TranscriptionCategory[] {
+  return categories.map((category) => ({ ...category }));
+}
+
 export default class TranscriptionAudioPlugin extends Plugin {
   settings: AudioPluginSettings;
 
@@ -80,7 +86,19 @@ export default class TranscriptionAudioPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const savedSettings = (await this.loadData()) as
+      | Partial<AudioPluginSettings>
+      | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
+
+    const savedCategories: TranscriptionCategory[] =
+      savedSettings && Array.isArray(savedSettings.categories)
+        ? savedSettings.categories
+        : [];
+    this.settings.categories = cloneCategories(
+      savedCategories.length > 0 ? savedCategories : DEFAULT_CATEGORIES
+    );
+    let shouldSaveSettings = false;
 
     const previousModel = this.settings.model;
     const migratedModel = MODEL_MIGRATIONS[previousModel] || previousModel;
@@ -90,19 +108,19 @@ export default class TranscriptionAudioPlugin extends Plugin {
       this.settings.model = DEFAULT_SETTINGS.model;
     }
 
-    // Migrate categories if missing
-    if (!this.settings.categories || this.settings.categories.length === 0) {
-      this.settings.categories = DEFAULT_CATEGORIES;
-    } else {
-      // Migrate existing categories without enabled field
-      for (const cat of this.settings.categories) {
-        if (cat.enabled === undefined) {
-          cat.enabled = cat.prompt.trim().length > 0;
-        }
+    // Migrate existing categories without enabled field
+    for (const cat of this.settings.categories) {
+      if (cat.enabled === undefined) {
+        cat.enabled = (cat.prompt || "").trim().length > 0;
+        shouldSaveSettings = true;
       }
     }
 
     if (this.settings.model !== previousModel) {
+      shouldSaveSettings = true;
+    }
+
+    if (shouldSaveSettings) {
       await this.saveSettings();
     }
   }

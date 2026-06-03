@@ -36,6 +36,7 @@ export class ObsidianInteractorService {
     } catch (error) {
       console.error("Failed to write transcript to target file:", error);
       new Notice("Error writing transcript to target file.");
+      throw error instanceof Error ? error : new Error(String(error));
     }
   }
 }

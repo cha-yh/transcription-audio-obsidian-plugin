@@ -24,6 +24,7 @@ import { TranscriptionCategory } from "_base/types/setting";
 
 const CHUNK_TRANSCRIPTION_PROMPT =
   "Transcribe the following audio. Output only the transcript text for this part, without any extra commentary.";
+const RETRY_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class TranscriptionController {
   private writing: boolean = false;
@@ -494,6 +495,7 @@ export class TranscriptionController {
                     model,
                     tempFilePath,
                     writeQueue,
+                    abortController.signal,
                     FAILED_PREFIX,
                     PLACEHOLDER_SUFFIX
                   );
@@ -852,26 +854,68 @@ export class TranscriptionController {
     retryFn: () => Promise<T>
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
-      const unsubscribe = progressBus.subscribe(async (event) => {
-        if (event.stage === "cancel-requested") {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe: (() => void) | undefined;
+      let settled = false;
+
+      const stopListening = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+        if (unsubscribe) {
           unsubscribe();
-          reject(new TranscriptionCancelledError());
+          unsubscribe = undefined;
+        }
+      };
+
+      const settleResolve = (value: T) => {
+        if (settled) return;
+        settled = true;
+        stopListening();
+        resolve(value);
+      };
+
+      const settleReject = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        stopListening();
+        reject(error);
+      };
+
+      const retryLabel = eventStage
+        .replace("-retry-requested", "")
+        .replace(/-/g, " ");
+
+      timeoutId = setTimeout(() => {
+        settleReject(
+          new Error(
+            `No ${retryLabel} retry requested within ${
+              RETRY_WAIT_TIMEOUT_MS / 60000
+            } minutes.`
+          )
+        );
+      }, RETRY_WAIT_TIMEOUT_MS);
+
+      unsubscribe = progressBus.subscribe(async (event) => {
+        if (event.stage === "cancel-requested") {
+          settleReject(new TranscriptionCancelledError());
           return;
         }
 
         if (event.stage !== eventStage) return;
 
-        unsubscribe();
+        stopListening();
 
         try {
           const result = await retryFn();
-          resolve(result);
+          settleResolve(result);
         } catch (retryError) {
           if (
             isTranscriptionCancelledError(retryError) ||
             isTranscriptionQuotaError(retryError)
           ) {
-            reject(retryError);
+            settleReject(retryError);
             return;
           }
           // Failed again — publish failure and wait for next retry
@@ -887,15 +931,10 @@ export class TranscriptionController {
                 : String(retryError),
           });
 
-          try {
-            const nextResult = await this.waitForRetryEvent(
-              eventStage,
-              retryFn
-            );
-            resolve(nextResult);
-          } catch (nextError) {
-            reject(nextError);
-          }
+          this.waitForRetryEvent(eventStage, retryFn).then(
+            settleResolve,
+            settleReject
+          );
         }
       });
     });
@@ -1084,22 +1123,69 @@ export class TranscriptionController {
     model: string,
     tempFilePath: string,
     writeQueue: ReturnType<typeof this.createFileWriteQueue>,
+    abortSignal: AbortSignal,
     failedPrefix: string,
     placeholderSuffix: string
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const remaining = new Set(failedIndices);
       let unsubscribe: (() => void) | null = null;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let settled = false;
+
+      const clearRetryTimeout = () => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+      };
+
+      const cleanup = () => {
+        clearRetryTimeout();
+        if (unsubscribe) unsubscribe();
+        abortSignal.removeEventListener("abort", onAbort);
+      };
 
       const finish = () => {
-        if (unsubscribe) unsubscribe();
+        if (settled) return;
+        settled = true;
+        cleanup();
         resolve();
       };
 
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      const scheduleRetryTimeout = () => {
+        clearRetryTimeout();
+        timeoutId = setTimeout(() => {
+          fail(
+            new Error(
+              `No chunk retry requested within ${
+                RETRY_WAIT_TIMEOUT_MS / 60000
+              } minutes.`
+            )
+          );
+        }, RETRY_WAIT_TIMEOUT_MS);
+      };
+
+      const onAbort = () => fail(new TranscriptionCancelledError());
+
+      if (abortSignal.aborted) {
+        fail(new TranscriptionCancelledError());
+        return;
+      }
+
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+      scheduleRetryTimeout();
+
       unsubscribe = progressBus.subscribe(async (event) => {
         if (event.stage === "cancel-requested") {
-          if (unsubscribe) unsubscribe();
-          reject(new TranscriptionCancelledError());
+          fail(new TranscriptionCancelledError());
           return;
         }
 
@@ -1111,6 +1197,7 @@ export class TranscriptionController {
         const chunkIndex = event.chunkIndex;
         const c = chunks[ci];
         const failedPlaceholder = `${failedPrefix}${chunkIndex}${placeholderSuffix}`;
+        clearRetryTimeout();
 
         progressBus.publish({
           stage: "chunk-start",
@@ -1168,7 +1255,7 @@ export class TranscriptionController {
                 elapsedMs: apiRequestElapsedMs,
               });
             },
-            undefined,
+            abortSignal,
             true,
             cachedFile
           );
@@ -1193,6 +1280,11 @@ export class TranscriptionController {
             success: true,
           });
         } catch (e) {
+          if (isTranscriptionCancelledError(e) || isTranscriptionQuotaError(e)) {
+            fail(e);
+            return;
+          }
+
           progressBus.publish({
             stage: "chunk-retry-complete",
             chunkIndex: chunkIndex,
@@ -1203,6 +1295,8 @@ export class TranscriptionController {
 
         if (remaining.size === 0) {
           finish();
+        } else {
+          scheduleRetryTimeout();
         }
       });
     });

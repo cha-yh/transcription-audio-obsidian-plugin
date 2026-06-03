@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ObsidianFileService } from "../obsidianFileService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
-import { TAbstractFile } from "obsidian";
 
 function createMockApp(
   files: { path: string; name: string }[],
@@ -11,9 +10,7 @@ function createMockApp(
     vault: {
       getAbstractFileByPath: vi.fn((p: string) => {
         if (existingFullPaths.includes(p)) {
-          const obj = new TAbstractFile();
-          obj.path = p;
-          return obj;
+          return { path: p };
         }
         return null;
       }),
