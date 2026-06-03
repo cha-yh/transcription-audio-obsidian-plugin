@@ -87,6 +87,10 @@ describe("MODELS", () => {
       expect(typeof m).toBe("string");
     }
   });
+
+  it("includes gemini-3.5-flash", () => {
+    expect(MODELS).toContain("gemini-3.5-flash");
+  });
 });
 
 describe("MODEL_MIGRATIONS", () => {

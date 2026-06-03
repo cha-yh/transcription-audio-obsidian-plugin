@@ -188,6 +188,7 @@ export const MODELS: string[] = [
   "gemini-2.5-pro",
   "gemini-3.1-pro-preview",
   "gemini-3-flash-preview",
+  "gemini-3.5-flash",
 ];
 
 export const MODEL_MIGRATIONS: Record<string, string> = {

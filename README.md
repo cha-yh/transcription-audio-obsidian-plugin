@@ -36,7 +36,7 @@ Open Settings → Transcription Audio:
 - Transcription mode:
   - Basic mode (default): prompt only
   - Template mode: dedicated prompt + output template (both prefilled with defaults)
-- Model: Select a Gemini-compatible model (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`)
+- Model: Select a Gemini-compatible model (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.5-flash`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
 - Prompt: Customize the instruction for the selected mode
 - Output template: Available in template mode to enforce a consistent final markdown structure
