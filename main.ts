@@ -37,6 +37,13 @@ const MODE_OPTIONS: Record<string, string> = {
   "transcription-only": "Transcription only mode",
 };
 
+const MODE_DESCRIPTIONS: Record<TranscriptionInputMode, string> = {
+  basic: "Sends the audio directly with the prompt.",
+  transcription:
+    "Creates a transcript from the audio, then runs the prompt against that transcript. This uses additional tokens for transcript generation.",
+  "transcription-only": "Creates only a transcript from the audio.",
+};
+
 type LegacyTranscriptionInputMode = TranscriptionInputMode | "template";
 
 type SavedAudioPluginSettings = Omit<
@@ -266,6 +273,28 @@ class TranscriptionSettingTab extends PluginSettingTab {
     });
   }
 
+  private displayDescriptionBlock(
+    containerEl: HTMLElement,
+    title: string,
+    description: string
+  ): void {
+    const titleEl = containerEl.createEl("h3", {
+      text: title,
+      cls: "transcription-audio-mode-description-title",
+    });
+    titleEl.style.setProperty("padding-left", "0", "important");
+    titleEl.style.setProperty("padding-inline-start", "0", "important");
+    titleEl.style.setProperty("margin-bottom", "0", "important");
+    titleEl.style.setProperty("margin-block-end", "0", "important");
+
+    const descriptionEl = containerEl.createEl("p", {
+      text: description,
+      cls: "setting-item-description transcription-audio-mode-description",
+    });
+    descriptionEl.style.setProperty("margin-top", "4px", "important");
+    descriptionEl.style.setProperty("margin-block-start", "4px", "important");
+  }
+
   private generateCategoryId(): string {
     return (
       "cat-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
@@ -273,11 +302,11 @@ class TranscriptionSettingTab extends PluginSettingTab {
   }
 
   private displayCategorySettings(containerEl: HTMLElement): void {
-    containerEl.createEl("h3", { text: "Categories" });
-    containerEl.createEl("p", {
-      text: "AI classifies each transcript into a category, then uses that category's prompt for summarization.",
-      cls: "setting-item-description",
-    });
+    this.displayDescriptionBlock(
+      containerEl,
+      "Categories",
+      "AI classifies each transcript into a category, then uses that category's prompt for summarization."
+    );
 
     const categories = this.plugin.settings.categories;
 
@@ -550,12 +579,13 @@ class TranscriptionSettingTab extends PluginSettingTab {
         });
       });
 
+    const selectedMode = this.plugin.settings.mode || "basic";
+
     new Setting(containerEl)
       .setName("Transcription mode")
-      .setDesc("Choose how audio is processed.")
       .addDropdown((dropdown) => {
         dropdown.addOptions(MODE_OPTIONS);
-        dropdown.setValue(this.plugin.settings.mode || "basic");
+        dropdown.setValue(selectedMode);
         dropdown.onChange(async (value) => {
           this.plugin.settings.mode =
             value === "transcription" || value === "transcription-only"
@@ -565,6 +595,12 @@ class TranscriptionSettingTab extends PluginSettingTab {
           this.display();
         });
       });
+
+    this.displayDescriptionBlock(
+      containerEl,
+      `Transcription mode: ${MODE_OPTIONS[selectedMode]}`,
+      MODE_DESCRIPTIONS[selectedMode]
+    );
 
     if (this.plugin.settings.mode === "transcription-only") {
       // Transcription-only mode: no prompt or template needed
