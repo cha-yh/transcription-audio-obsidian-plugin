@@ -1,11 +1,16 @@
 # Transcription Audio(Beta) Plugin for Obsidian
 
-Turn your audio into structured Markdown notes inside Obsidian. This plugin detects an audio file linked in your current note, sends it to Gemini for transcription and summarization, and inserts the result back into your note. A right-hand progress panel shows what’s happening step by step.
+Turn your audio into structured Markdown notes inside Obsidian. This plugin detects an audio file linked in your current note, sends it to Gemini for transcription, summarization, or transcript generation, and inserts the result back into your note. A right-hand progress panel shows what’s happening step by step.
 
 ## Features
 
 - Smart audio detection from links or embeds in the active note
-- Google Gemini transcription and summarization
+- Google Gemini transcription, transcript generation, and summarization
+- Prompt only, transcription, and transcription only modes
+- Long-audio transcription with time-based chunking and chunk retry handling
+- Category classification for transcript-based summarization
+- Template prompt controls for consistent Markdown output
+- Reusable transcript file creation and transcript file links
 - Progress panel (sidebar) with live status:
   - Detected audio filename and size
   - Audio preparation status
@@ -31,7 +36,7 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 
 Open Settings → Transcription Audio:
 
-- API Key: Select the API key to use
+- API Key: Configure the Gemini API key to use. The deprecated plain-text API key input has been removed.
 - On older Obsidian versions, API key storage is disabled and you will see an update-required message (Obsidian 1.11.4+)
 - Transcription mode:
   - Prompt only mode (default): sends audio directly with the configured prompt
@@ -39,9 +44,9 @@ Open Settings → Transcription Audio:
   - Transcription only mode: creates the raw transcript and skips summarization
 - Model: Select a Gemini-compatible model (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.5-flash`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
-- Prompt: Customize the instruction for Prompt only mode
-- Template prompt: Available in Prompt only mode to enforce a consistent final markdown structure
-- Category classification: Available in Transcription mode. When disabled, the same Prompt/Template prompt settings are used for all transcripts.
+- Prompt: Customize the instruction for Prompt only mode and transcript summarization
+- Template prompt: Toggle in Prompt only mode to show Instructions and Output template fields for a consistent final markdown structure
+- Category classification: Available in Transcription mode. When disabled, Transcription mode uses the same Prompt/Template prompt settings as Prompt only mode.
 
 ## Usage
 
@@ -52,13 +57,36 @@ Open Settings → Transcription Audio:
    <img alt="Image" src="https://github.com/user-attachments/assets/254e3621-4733-4961-ab90-ce58792d6cc6" />
 4. A progress panel will automatically open in the right sidebar, showing real-time status updates including file upload progress, API request status, and transcription progress.
    <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
-5. When complete, the transcription and notes are inserted at your starting cursor position.
+5. When complete, the transcription, summary, or transcript link is inserted at your starting cursor position.
 
 ## Privacy & Data
 
 Audio content is sent to Google’s Gemini API for processing. The plugin does not store your audio or transcripts outside your vault. Keep your API key secure and review your organization’s data policies before use.
 
 ## Changelog
+
+### Version 0.6.0
+
+- **Transcription workflows**
+  - Added a transcribe-then-summarize workflow that creates reusable transcript files before summarization
+  - Added Transcription only mode for raw transcript generation without summarization
+  - Consolidated transcription mode settings and prompt/template prompt controls
+- **Long-audio support**
+  - Added time-based chunking for long audio files
+  - Added parallel chunk processing, temp file updates, and chunk retry handling
+- **Category prompts**
+  - Added category classification and category-specific prompts for transcript summarization
+  - Uses the same Prompt/Template prompt controls as Prompt only mode when category classification is disabled
+- **Model and settings updates**
+  - Added cached upload reuse and upload metadata logging
+  - Added the `gemini-3.5-flash` model option
+  - Removed the deprecated plain-text API key setting
+  - Added transcript file links in generated output and removed embedded transcript links
+- **Fixes**
+  - Fixed cancellation and retry cleanup across transcription, chunk retry, classification, and summarization flows
+  - Fixed quota error handling and temporary transcription file cleanup
+  - Fixed Obsidian reload/resource cleanup issues that could trigger `offref` errors
+  - Stabilized settings loading and propagated Obsidian file write failures to callers
 
 ### Version 0.5.0
 
