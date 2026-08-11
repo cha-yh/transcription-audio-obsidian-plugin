@@ -183,6 +183,125 @@
   color: var(--text-muted);
 }
 
+.transcription-audio-log-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.transcription-audio-log-line-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.transcription-audio-sparkline {
+  padding: 4px 0 6px;
+}
+
+.transcription-audio-sparkline-svg {
+  display: block;
+  width: 100%;
+  height: 28px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.transcription-audio-sparkline-bar {
+  fill: var(--interactive-accent);
+}
+
+/* Buckets with essentially no speech — noise or silence */
+.transcription-audio-sparkline-bar-quiet {
+  fill: var(--text-faint);
+}
+
+.transcription-audio-sparkline-divider {
+  stroke: var(--text-muted);
+  stroke-width: 0.3;
+  stroke-dasharray: 1 1;
+  opacity: 0.6;
+}
+
+/* Diagonal stripes over ranges that are not sent to the model */
+.transcription-audio-sparkline-hatch {
+  stroke: var(--text-warning, #e0a458);
+  stroke-width: 0.7;
+  opacity: 0.55;
+}
+
+.transcription-audio-sparkline-labels {
+  position: relative;
+  height: 12px;
+  font-size: 9px;
+  color: var(--text-faint);
+}
+
+.transcription-audio-sparkline-label,
+.transcription-audio-sparkline-label-skip {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.transcription-audio-sparkline-label-skip {
+  color: var(--text-warning, #e0a458);
+}
+
+.transcription-audio-sparkline-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-faint);
+  padding-top: 2px;
+}
+
+.transcription-audio-sparkline-rows {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.transcription-audio-sparkline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 1px 0;
+}
+
+.transcription-audio-sparkline-row-skip {
+  color: var(--text-warning, #e0a458);
+}
+
+.transcription-audio-sparkline-row-label {
+  font-variant-numeric: tabular-nums;
+}
+
+.transcription-audio-log-retry-button {
+  flex: none;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 18px;
+  height: 18px;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background-color: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+}
+
+.transcription-audio-log-retry-button:hover:enabled {
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+
+.transcription-audio-log-retry-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .transcription-audio-sessions {
   display: flex;
   flex-direction: column;

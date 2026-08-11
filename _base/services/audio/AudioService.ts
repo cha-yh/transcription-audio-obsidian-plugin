@@ -1,3 +1,8 @@
+import {
+  analyzeSpeechActivity,
+  SpeechActivityResult,
+} from "../../utils/speechActivity";
+
 export class AudioService {
   arrayBufferToBase64(buffer: ArrayBuffer): string {
     let binary = "";
@@ -94,6 +99,35 @@ export class AudioService {
       dataOffset,
       dataSize,
     };
+  }
+
+  /**
+   * Estimates where speech actually occurs in an already-decoded PCM16 WAV,
+   * so chunks that contain only room noise can be surfaced before they are
+   * sent to the model.
+   */
+  analyzeWavSpeechActivity(buffer: ArrayBuffer): SpeechActivityResult {
+    const { audioFormat, numChannels, sampleRate, bitsPerSample, dataOffset, dataSize } =
+      this.parseWavHeader(buffer);
+
+    if (audioFormat !== 1 || bitsPerSample !== 16) {
+      throw new Error(
+        `Only PCM 16-bit WAV can be analysed (format=${audioFormat}, bps=${bitsPerSample})`
+      );
+    }
+
+    const byteLength = Math.min(dataSize, buffer.byteLength - dataOffset);
+    const sampleCount = Math.floor(byteLength / 2);
+    // Int16Array needs a 2-byte-aligned offset; data chunks usually start at
+    // an even offset but nothing in the format guarantees it.
+    const samples =
+      dataOffset % 2 === 0
+        ? new Int16Array(buffer, dataOffset, sampleCount)
+        : new Int16Array(
+            buffer.slice(dataOffset, dataOffset + sampleCount * 2)
+          );
+
+    return analyzeSpeechActivity({ samples, sampleRate, numChannels });
   }
 
   sliceWavPcm16(

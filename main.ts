@@ -113,7 +113,10 @@ export default class TranscriptionAudioPlugin extends Plugin {
   }
 
   onunload(): void {
-    this.app.workspace.detachLeavesOfType(this.progressViewType);
+    // Deliberately no detachLeavesOfType here: Obsidian tears the view down
+    // itself, and detaching during unload both double-removes DOM nodes and
+    // discards the user's sidebar placement.
+    this.transcriptionController.dispose();
   }
 
   async loadSettings() {
