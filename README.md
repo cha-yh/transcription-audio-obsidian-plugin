@@ -67,6 +67,8 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 
 ### Version 0.7.0
 
+<img width="425" height="234" alt="Speech activity sparkline with chunk boundaries and a skipped range" src="https://github.com/user-attachments/assets/5a72875c-ffd3-4b6c-9ce0-dbf1449ed264" />
+
 - **Speech-aware chunking**
   - Detects where speech actually occurs and plans chunks around it, so silent stretches are never sent to the model
   - Long silences split the recording into speech islands chunked independently, keeping a late remark after a long gap without dragging the gap along
@@ -83,68 +85,36 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
   - Disabling the plugin no longer discards the progress view's sidebar placement
   - Transcript text containing `$&` or `` $` `` is no longer mangled when written to the transcription file
 
-### Version 0.6.0
+### Version 0.6.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.6.0)
 
 - **Transcription workflows**
-  - Added a transcribe-then-summarize workflow that creates reusable transcript files before summarization
-  - Added Transcription only mode for raw transcript generation without summarization
-  - Consolidated transcription mode settings and prompt/template prompt controls
 - **Long-audio support**
-  - Added time-based chunking for long audio files
-  - Added parallel chunk processing, temp file updates, and chunk retry handling
 - **Category prompts**
-  - Added category classification and category-specific prompts for transcript summarization
-  - Uses the same Prompt/Template prompt controls as Prompt only mode when category classification is disabled
 - **Model and settings updates**
-  - Added cached upload reuse and upload metadata logging
-  - Added the `gemini-3.5-flash` model option
-  - Removed the deprecated plain-text API key setting
-  - Added transcript file links in generated output and removed embedded transcript links
 - **Fixes**
-  - Fixed cancellation and retry cleanup across transcription, chunk retry, classification, and summarization flows
-  - Fixed quota error handling and temporary transcription file cleanup
-  - Fixed Obsidian reload/resource cleanup issues that could trigger `offref` errors
-  - Stabilized settings loading and propagated Obsidian file write failures to callers
 
-### Version 0.5.0
+### Version 0.5.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.5.0)
 
 - **Transcription mode enhancements**
-  - Added Template prompt support so prompt and output template can be configured separately
 - **Gemini 3 Pro Preview migration**
-  - Added automatic migration from `gemini-3-pro-preview` to `gemini-3.1-pro-preview`
-  - Updated related settings and documentation for current model options
 
-### Version 0.4.1
+### Version 0.4.1 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.4.1)
 
 - **Gemini 3 Pro Preview migration**
-  - Replaced `gemini-3-pro-preview` with `gemini-3.1-pro-preview` in model selection
-  - Automatically migrates previously saved `gemini-3-pro-preview` setting to `gemini-3.1-pro-preview`
 
-### Version 0.4.0
+### Version 0.4.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.4.0)
 
 - **Secure API key support**
-  - Added Obsidian API key selection
 - **Cancelable transcription flow**
-  - Added cancel control in the progress panel
-  - Improved cancellation handling for upload/request steps
 - **Progress panel navigation improvements**
-  - File and Target entries are clickable links
-  - Target navigation moves to the exact line/character position
 - **Progress log improvements**
-  - Added localized timestamp to the initial `Log start` line
 - **Gemini usage visibility**
-  - Added token usage logs (prompt/output/total and related token fields) in progress detail
 
-### Version 0.3.0
+### Version 0.3.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.3.0)
 
 - **Add gemini-3-flash-preview(default) model to settings**
 - **Enhanced Progress Tracking**: Improved transcription process with detailed progress tracking and UI updates
-  - Enhanced progress panel with more detailed status information
-  - Better visual feedback during transcription process
-  - Improved error handling and status reporting
 - **Updated Default Settings**: Updated default settings with new model and refined prompt structure
-  - Optimized default model selection
-  - Improved prompt structure for better transcription quality
 
 ## License
 
