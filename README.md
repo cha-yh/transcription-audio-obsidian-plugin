@@ -65,6 +65,24 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 
 ## Changelog
 
+### Version 0.7.0
+
+- **Speech-aware chunking**
+  - Detects where speech actually occurs and plans chunks around it, so silent stretches are never sent to the model
+  - Long silences split the recording into speech islands chunked independently, keeping a late remark after a long gap without dragging the gap along
+  - Skipped ranges are recorded in the transcription file and can be transcribed later
+- **Per-chunk retry**
+  - Each chunk's log line gains a Retry button that re-runs only that chunk and rewrites only its region, leaving manual edits to other chunks intact
+  - Reuses the uploaded file when it is still valid, so most retries skip the upload entirely
+- **Progress log**
+  - Added a sparkline showing speech activity, chunk boundaries, skipped ranges, and a per-chunk timeline
+  - Log lines are prefixed with the chunk number and carry the chunk's time range, so parallel chunks can be told apart
+- **Fixes**
+  - Trailing chunks shorter than two minutes now fold into the previous chunk instead of costing a request that returns nothing
+  - Fixed a `removeChild` error when the progress view was open while the plugin was disabled
+  - Disabling the plugin no longer discards the progress view's sidebar placement
+  - Transcript text containing `$&` or `` $` `` is no longer mangled when written to the transcription file
+
 ### Version 0.6.0
 
 - **Transcription workflows**
