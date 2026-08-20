@@ -39,7 +39,7 @@
 ### Path B: Transcription Mode
 
 - **Existing transcript check**: Looks for a previously saved `_transcription_*.md` file for the same audio; if found, the transcription step is skipped entirely
-- **Audio preparation**: If the file is not already PCM16 WAV, it is decoded via `AudioContext` and re-encoded to 16 kHz mono PCM16 WAV
+- **Audio preparation**: If the file is not already PCM16 WAV, it is decoded via `AudioContext` and re-encoded to 16 kHz mono PCM16 WAV. This is the only step that depends on a browser audio API, and the only one whose behaviour can differ between desktop and a mobile WebView — see [mobile-support.md](./mobile-support.md)
 - **Short audio (< 30 min)**: A single transcription request is made using the original file format with a transcription-only prompt
   - The raw transcript is saved to a temp file and immediately finalized (renamed from `_temp.md` to `.md`)
 - **Long audio (≥ 30 min)**: Time-based chunking splits the audio into 20-minute segments with 1.5 s overlap
