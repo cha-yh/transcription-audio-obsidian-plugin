@@ -7,6 +7,7 @@ import {
   isTranscriptionCancelledError,
   isTranscriptionQuotaError,
   UploadedFileInfo,
+  TranscriptionAudioSource,
 } from "../_base/services/transcription/TranscriptionService";
 import {
   computeWavChunkRanges,
@@ -19,6 +20,7 @@ import {
   speechRatioInRange,
 } from "../_base/utils/speechActivity";
 import { progressBus } from "../_base/utils/progressBus";
+import { toBlob } from "../_base/utils/blob";
 import {
   hasChunkMarker,
   readChunkBody,
@@ -423,20 +425,16 @@ export class TranscriptionController {
                 startMs: c.startMs,
                 endMs: c.endMs,
               });
-              const chunkBuffer = this.audioService.sliceWavPcm16(
-                audioBuffer,
-                c.startMs,
-                c.endMs
+              const chunkBlob = toBlob(
+                this.audioService.sliceWavPcm16(audioBuffer, c.startMs, c.endMs),
+                "audio/wav"
               );
               const preface = `\n\n[Part ${index}/${chunks.length}]\n`;
               try {
-                const chunkBase64 =
-                  await this.audioService.arrayBufferToBase64Async(chunkBuffer);
                 const result = await this.transcriptionService.transcribe(
                   apiKey!,
                   CHUNK_TRANSCRIPTION_PROMPT,
-                  chunkBase64,
-                  "audio/wav",
+                  { kind: "upload", blob: chunkBlob, mimeType: "audio/wav" },
                   model,
                   6 * 60 * 1000,
                   () => {
@@ -570,14 +568,11 @@ export class TranscriptionController {
                 // No chunk ranges to report, but the profile is still useful.
                 this.publishSpeechProfile(wavBuffer!, [], totalMs);
 
-                const audioBase64 =
-                  await this.audioService.arrayBufferToBase64Async(audioBuffer);
                 const transcriptionResult =
                   await this.transcriptionService.transcribe(
                     apiKey!,
                     DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-                    audioBase64,
-                    mimeType,
+                    { kind: "upload", blob: toBlob(audioBuffer, mimeType), mimeType },
                     model,
                     6 * 60 * 1000,
                     () => {
@@ -853,13 +848,10 @@ export class TranscriptionController {
 
             } // end if (!transcriptionOnly)
           } else {
-            const audioBase64 =
-              await this.audioService.arrayBufferToBase64Async(audioBuffer);
             const result = await this.transcriptionService.transcribe(
               apiKey!,
               templateModePrompt,
-              audioBase64,
-              mimeType,
+              { kind: "upload", blob: toBlob(audioBuffer, mimeType), mimeType },
               model,
               6 * 60 * 1000,
               () => {
@@ -1270,20 +1262,16 @@ export class TranscriptionController {
       endMs: c.endMs,
     });
 
-    const chunkBuffer = this.audioService.sliceWavPcm16(
-      wavBuffer,
-      c.startMs,
-      c.endMs
+    const chunkBlob = toBlob(
+      this.audioService.sliceWavPcm16(wavBuffer, c.startMs, c.endMs),
+      "audio/wav"
     );
 
     try {
-      const chunkBase64 =
-        await this.audioService.arrayBufferToBase64Async(chunkBuffer);
       const result = await this.transcriptionService.transcribe(
         apiKey,
         DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-        chunkBase64,
-        "audio/wav",
+        { kind: "upload", blob: chunkBlob, mimeType: "audio/wav" },
         model,
         6 * 60 * 1000,
         () => {
@@ -1562,10 +1550,10 @@ export class TranscriptionController {
    * uploaded file has expired — otherwise the cached URI is reused and the
    * audio never has to be decoded again.
    */
-  private async buildChunkBase64(
+  private async buildChunkBlob(
     audioPath: string,
     range: { startMs: number; endMs: number }
-  ): Promise<string> {
+  ): Promise<Blob> {
     const audioFile = this.app.vault.getAbstractFileByPath(audioPath);
     if (!(audioFile instanceof TFile)) {
       throw new Error(`Original audio file not found: ${audioPath}`);
@@ -1576,12 +1564,10 @@ export class TranscriptionController {
     const wavBuffer = this.isPcm16Wav(buffer)
       ? buffer
       : (await this.audioService.decodeToWavPcm16(buffer)).wavBuffer;
-    const chunkBuffer = this.audioService.sliceWavPcm16(
-      wavBuffer,
-      range.startMs,
-      range.endMs
+    return toBlob(
+      this.audioService.sliceWavPcm16(wavBuffer, range.startMs, range.endMs),
+      "audio/wav"
     );
-    return this.audioService.arrayBufferToBase64Async(chunkBuffer);
   }
 
   /**
@@ -1663,18 +1649,20 @@ export class TranscriptionController {
 
     try {
       const cached = session.uploadedFiles[ci];
-      const cachedFile = this.isUploadedFileValid(cached) ? cached! : undefined;
-      // transcribe() ignores the base64 payload entirely when cachedFile is
-      // set, so the decode is skipped on the common path.
-      const audioBase64 = cachedFile
-        ? ""
-        : await this.buildChunkBase64(session.audioPath, range);
+      // Rebuilding the chunk re-reads and re-decodes the whole file, so it only
+      // happens when the cached upload is gone.
+      const audio: TranscriptionAudioSource = this.isUploadedFileValid(cached)
+        ? { kind: "cached", file: cached! }
+        : {
+            kind: "upload",
+            blob: await this.buildChunkBlob(session.audioPath, range),
+            mimeType: "audio/wav",
+          };
 
       const result = await this.transcriptionService.transcribe(
         session.apiKey,
         DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-        audioBase64,
-        "audio/wav",
+        audio,
         session.model,
         6 * 60 * 1000,
         () => {
@@ -1699,8 +1687,7 @@ export class TranscriptionController {
           });
         },
         undefined,
-        true,
-        cachedFile
+        true
       );
 
       if (result.uploadedFile) {
