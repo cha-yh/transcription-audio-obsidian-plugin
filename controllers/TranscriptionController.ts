@@ -28,7 +28,7 @@ import {
   wrapChunkBody,
 } from "../_base/utils/chunkMarkers";
 import { ObsidianFileService } from "_base/services/obsidian/obsidianFileService";
-import { AudioService } from "../_base/services/audio/AudioService";
+import { AudioService, WavHeader } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
 import {
   DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
@@ -567,6 +567,10 @@ export class TranscriptionController {
                 // Under 30 minutes: single request with original file.
                 // No chunk ranges to report, but the profile is still useful.
                 this.publishSpeechProfile(wavBuffer!, [], totalMs);
+                // The upload below sends the original file, so the decoded copy
+                // is done with — releasing it before a request that can run for
+                // minutes keeps it off the heap for that whole time.
+                wavBuffer = null;
 
                 const transcriptionResult =
                   await this.transcriptionService.transcribe(
@@ -640,6 +644,13 @@ export class TranscriptionController {
                   1500
                 );
 
+                // Chunks are cut from the Blob, not the ArrayBuffer: each
+                // slice then references the audio instead of copying it. The
+                // buffer is released here because planning was its last reader.
+                const wavHeader = this.audioService.parseWavHeader(wavBuffer!);
+                const wavBlob = new Blob([wavBuffer!], { type: "audio/wav" });
+                wavBuffer = null;
+
                 const PENDING_PREFIX = "{{CHUNK_PENDING:";
                 const FAILED_PREFIX = "{{CHUNK_FAILED:";
                 const PLACEHOLDER_SUFFIX = "}}";
@@ -692,7 +703,8 @@ export class TranscriptionController {
                       ci,
                       chunk: c,
                       chunkTotal: chunks.length,
-                      wavBuffer: wavBuffer!,
+                      wavBlob: wavBlob!,
+                      wavHeader: wavHeader!,
                       apiKey: apiKey!,
                       model,
                       chunkResults,
@@ -1209,7 +1221,8 @@ export class TranscriptionController {
     ci: number;
     chunk: { startMs: number; endMs: number };
     chunkTotal: number;
-    wavBuffer: ArrayBuffer;
+    wavBlob: Blob;
+    wavHeader: WavHeader;
     apiKey: string;
     model: string;
     chunkResults: string[];
@@ -1230,7 +1243,8 @@ export class TranscriptionController {
       ci,
       chunk: c,
       chunkTotal,
-      wavBuffer,
+      wavBlob,
+      wavHeader,
       apiKey,
       model,
       chunkResults,
@@ -1262,9 +1276,11 @@ export class TranscriptionController {
       endMs: c.endMs,
     });
 
-    const chunkBlob = toBlob(
-      this.audioService.sliceWavPcm16(wavBuffer, c.startMs, c.endMs),
-      "audio/wav"
+    const chunkBlob = this.audioService.sliceWavPcm16ToBlob(
+      wavBlob,
+      wavHeader,
+      c.startMs,
+      c.endMs
     );
 
     try {
