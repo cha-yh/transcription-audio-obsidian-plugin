@@ -36,27 +36,56 @@ import { TranscriptionCategory } from "_base/types/setting";
 
 const CHUNK_TRANSCRIPTION_PROMPT =
   "Transcribe the following audio. Output only the transcript text for this part, without any extra commentary.";
+/** How long the classification/summarization steps wait for a manual retry. */
 const RETRY_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
-/** Body written in place of a chunk that held no speech. */
-const SKIPPED_MARKER = "[No speech detected —";
+function formatStamp(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
+  return `${h > 0 ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
+}
 
-function formatRangeLabel(startMs: number, endMs: number): string {
-  const stamp = (ms: number) => {
-    const total = Math.floor(ms / 1000);
-    const h = Math.floor(total / 3600);
-    const m = Math.floor((total % 3600) / 60);
-    const s = total % 60;
-    const mm = h > 0 ? String(m).padStart(2, "0") : String(m);
-    return `${h > 0 ? `${h}:` : ""}${mm}:${String(s).padStart(2, "0")}`;
-  };
-  return `${stamp(startMs)}–${stamp(endMs)} skipped]`;
+/**
+ * Body written in place of a chunk that held no speech. Wrapped in `%%` so it
+ * stays out of the rendered transcript, same as the chunk markers around it.
+ */
+function formatSkippedBody(startMs: number, endMs: number): string {
+  return `%%[No speech detected — ${formatStamp(startMs)}–${formatStamp(
+    endMs
+  )} skipped]%%`;
 }
 
 type ChunkUsageContext = {
   chunkIndex: number;
   chunkTotal: number;
+  displayIndex?: number;
+  displayTotal?: number;
   retryable?: boolean;
 };
+
+/**
+ * Numbering shown in the progress log, counting only the chunks that are
+ * actually sent. Skipped ranges keep their planned index for the file markers
+ * but must not inflate what the user sees as the total.
+ */
+function buildChunkDisplay(chunks: PlannedChunk[]): {
+  displayTotal: number;
+  displayIndexOf: (ci: number) => number | undefined;
+} {
+  const displayByCi = new Map<number, number>();
+  let sent = 0;
+  chunks.forEach((chunk, ci) => {
+    if (chunk.skipped) return;
+    sent += 1;
+    displayByCi.set(ci, sent);
+  });
+  return {
+    displayTotal: sent,
+    displayIndexOf: (ci) => displayByCi.get(ci),
+  };
+}
 
 /**
  * What a finished run leaves behind so that a single chunk can still be
@@ -67,7 +96,8 @@ type ChunkUsageContext = {
 type ChunkRerunSession = {
   audioPath: string;
   transcriptPath: string;
-  chunks: { startMs: number; endMs: number }[];
+  /** Full plan including skipped ranges, so display numbering can be rebuilt. */
+  chunks: PlannedChunk[];
   model: string;
   apiKey: string;
   uploadedFiles: (UploadedFileInfo | null)[];
@@ -215,6 +245,8 @@ export class TranscriptionController {
       stage: "api-usage",
       chunkIndex: chunk?.chunkIndex,
       chunkTotal: chunk?.chunkTotal,
+      displayIndex: chunk?.displayIndex,
+      displayTotal: chunk?.displayTotal,
       retryable: chunk?.retryable,
       promptTokenCount: result.usage.promptTokenCount,
       candidatesTokenCount: result.usage.candidatesTokenCount,
@@ -633,10 +665,7 @@ export class TranscriptionController {
                     wrapChunkBody(
                       i + 1,
                       chunk.skipped
-                        ? `${SKIPPED_MARKER} ${formatRangeLabel(
-                            chunk.startMs,
-                            chunk.endMs
-                          )}`
+                        ? formatSkippedBody(chunk.startMs, chunk.endMs)
                         : `${PENDING_PREFIX}${i + 1}${PLACEHOLDER_SUFFIX}`
                     )
                   )
@@ -654,6 +683,9 @@ export class TranscriptionController {
 
                 const writeQueue =
                   this.createFileWriteQueue(tempFilePath);
+
+                const { displayTotal, displayIndexOf } =
+                  buildChunkDisplay(chunks);
 
                 // Launch all chunks in parallel; skipped ranges never reach
                 // the model and are already written into the temp file.
@@ -674,6 +706,8 @@ export class TranscriptionController {
                       writeQueue,
                       failedPrefix: FAILED_PREFIX,
                       placeholderSuffix: PLACEHOLDER_SUFFIX,
+                      displayIndex: displayIndexOf(ci),
+                      displayTotal,
                       abortSignal: abortController.signal,
                       publishUsage,
                     })
@@ -700,22 +734,19 @@ export class TranscriptionController {
                   elapsedMs: transcriptionStepElapsedMs,
                 });
 
-                // Wait for retries on failed chunks
+                // Failed chunks stay in the file as FAILED placeholders and are
+                // retried from the progress log afterwards. Blocking the run
+                // until every failure is resolved used to discard the whole
+                // transcription — including the chunks that succeeded — once the
+                // wait timed out.
                 if (failedChunkIndices.length > 0) {
-                  await this.handleChunkRetries(
-                    failedChunkIndices,
-                    chunks,
-                    chunkResults,
-                    chunkUploadedFiles,
-                    wavBuffer!,
-                    apiKey!,
-                    model,
-                    writeQueue,
-                    abortController.signal
+                  new Notice(
+                    `${failedChunkIndices.length} chunk(s) failed. Retry them from the transcription progress panel.`
                   );
                 }
 
-                // Build final transcript from results
+                // Build final transcript from results. Failed chunks contribute
+                // nothing rather than leaking a placeholder into the summary.
                 rawTranscript = chunkResults
                   .filter((t) => t.length > 0)
                   .join("\n\n");
@@ -1195,10 +1226,12 @@ export class TranscriptionController {
     writeQueue: ReturnType<typeof this.createFileWriteQueue>;
     failedPrefix: string;
     placeholderSuffix: string;
+    displayIndex?: number;
+    displayTotal: number;
     abortSignal: AbortSignal;
     publishUsage: (
       result: TranscriptionResult,
-      chunk?: { chunkIndex: number; chunkTotal: number }
+      chunk?: ChunkUsageContext
     ) => void;
   }): Promise<void> {
     const {
@@ -1214,12 +1247,20 @@ export class TranscriptionController {
       writeQueue,
       failedPrefix,
       placeholderSuffix,
+      displayIndex,
+      displayTotal,
       abortSignal,
       publishUsage,
     } = params;
 
     const chunkIndex = ci + 1;
-    const chunkContext = { chunkIndex, chunkTotal, retryable: true };
+    const chunkContext = {
+      chunkIndex,
+      chunkTotal,
+      displayIndex,
+      displayTotal,
+      retryable: true,
+    };
     const failedPlaceholder = `${failedPrefix}${chunkIndex}${placeholderSuffix}`;
 
     progressBus.publish({
@@ -1294,6 +1335,8 @@ export class TranscriptionController {
           stage: "chunk-short-response",
           chunkIndex,
           chunkTotal,
+          displayIndex,
+          displayTotal,
           charCount: trimmedText.length,
         });
       }
@@ -1316,6 +1359,8 @@ export class TranscriptionController {
         stage: "chunk-complete",
         chunkIndex,
         chunkTotal,
+        displayIndex,
+        displayTotal,
       });
     } catch (e) {
       if (isTranscriptionCancelledError(e) || isTranscriptionQuotaError(e)) {
@@ -1323,7 +1368,9 @@ export class TranscriptionController {
       }
 
       failedChunkIndices.push(ci);
-      chunkResults[ci] = failedPlaceholder;
+      // Left empty so the placeholder never reaches the summary; the file keeps
+      // the FAILED marker so the chunk can be retried later.
+      chunkResults[ci] = "";
 
       // Update temp file: mark the chunk body as FAILED, markers intact
       await writeQueue.enqueue(
@@ -1335,6 +1382,8 @@ export class TranscriptionController {
         stage: "chunk-failed",
         chunkIndex,
         chunkTotal,
+        displayIndex,
+        displayTotal,
         message: e?.message || String(e),
       });
     }
@@ -1346,205 +1395,6 @@ export class TranscriptionController {
     const expiration = new Date(file.expirationTime).getTime();
     // Consider invalid if less than 1 minute remaining
     return expiration > Date.now() + 60 * 1000;
-  }
-
-  private async handleChunkRetries(
-    failedIndices: number[],
-    chunks: { startMs: number; endMs: number }[],
-    chunkResults: string[],
-    chunkUploadedFiles: (UploadedFileInfo | null)[],
-    wavBuffer: ArrayBuffer,
-    apiKey: string,
-    model: string,
-    writeQueue: ReturnType<typeof this.createFileWriteQueue>,
-    abortSignal: AbortSignal
-  ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const remaining = new Set(failedIndices);
-      let unsubscribe: (() => void) | null = null;
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      let settled = false;
-
-      const clearRetryTimeout = () => {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = undefined;
-        }
-      };
-
-      const cleanup = () => {
-        clearRetryTimeout();
-        if (unsubscribe) unsubscribe();
-        abortSignal.removeEventListener("abort", onAbort);
-      };
-
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        resolve();
-      };
-
-      const fail = (error: unknown) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(error);
-      };
-
-      const scheduleRetryTimeout = () => {
-        clearRetryTimeout();
-        timeoutId = setTimeout(() => {
-          fail(
-            new Error(
-              `No chunk retry requested within ${
-                RETRY_WAIT_TIMEOUT_MS / 60000
-              } minutes.`
-            )
-          );
-        }, RETRY_WAIT_TIMEOUT_MS);
-      };
-
-      const onAbort = () => fail(new TranscriptionCancelledError());
-
-      if (abortSignal.aborted) {
-        fail(new TranscriptionCancelledError());
-        return;
-      }
-
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-      scheduleRetryTimeout();
-
-      unsubscribe = progressBus.subscribe(async (event) => {
-        if (event.stage === "cancel-requested") {
-          fail(new TranscriptionCancelledError());
-          return;
-        }
-
-        if (event.stage !== "chunk-retry-requested") return;
-
-        const ci = event.chunkIndex - 1;
-        if (!remaining.has(ci)) return;
-
-        const chunkIndex = event.chunkIndex;
-        const c = chunks[ci];
-        const chunkContext = {
-          chunkIndex,
-          chunkTotal: chunks.length,
-          retryable: true,
-        };
-        clearRetryTimeout();
-
-        progressBus.publish({
-          stage: "chunk-start",
-          ...chunkContext,
-          startMs: c.startMs,
-          endMs: c.endMs,
-        });
-
-        try {
-          const cachedFile = this.isUploadedFileValid(chunkUploadedFiles[ci])
-            ? chunkUploadedFiles[ci]!
-            : undefined;
-
-          if (this.isDevMode) {
-            console.debug(
-              `[DEBUG] Chunk ${chunkIndex} retry — cached file:`,
-              cachedFile
-                ? {
-                    uri: cachedFile.uri,
-                    expirationTime: cachedFile.expirationTime,
-                    reusing: true,
-                  }
-                : { reusing: false, reason: "expired or missing" }
-            );
-          }
-
-          const chunkBuffer = this.audioService.sliceWavPcm16(
-            wavBuffer,
-            c.startMs,
-            c.endMs
-          );
-          const chunkBase64 =
-            await this.audioService.arrayBufferToBase64Async(chunkBuffer);
-          const result = await this.transcriptionService.transcribe(
-            apiKey,
-            DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-            chunkBase64,
-            "audio/wav",
-            model,
-            6 * 60 * 1000,
-            () => {
-              progressBus.publish({
-                stage: "file-upload-start",
-                ...chunkContext,
-              });
-            },
-            (uploadElapsedMs) => {
-              progressBus.publish({
-                stage: "file-upload-complete",
-                ...chunkContext,
-                elapsedMs: uploadElapsedMs,
-              });
-            },
-            () => {
-              progressBus.publish({
-                stage: "api-request-start",
-                ...chunkContext,
-              });
-            },
-            (apiRequestElapsedMs) => {
-              progressBus.publish({
-                stage: "api-request-complete",
-                ...chunkContext,
-                elapsedMs: apiRequestElapsedMs,
-              });
-            },
-            abortSignal,
-            true,
-            cachedFile
-          );
-
-          if (result.uploadedFile) {
-            chunkUploadedFiles[ci] = result.uploadedFile;
-          }
-
-          const trimmedText = result.text.trim();
-          chunkResults[ci] = trimmedText;
-
-          await writeQueue.enqueue(
-            (data) => replaceChunkBody(data, chunkIndex, trimmedText) ?? data
-          );
-
-          remaining.delete(ci);
-
-          progressBus.publish({
-            stage: "chunk-retry-complete",
-            chunkIndex: chunkIndex,
-            chunkTotal: chunks.length,
-            success: true,
-          });
-        } catch (e) {
-          if (isTranscriptionCancelledError(e) || isTranscriptionQuotaError(e)) {
-            fail(e);
-            return;
-          }
-
-          progressBus.publish({
-            stage: "chunk-retry-complete",
-            chunkIndex: chunkIndex,
-            chunkTotal: chunks.length,
-            success: false,
-          });
-        }
-
-        if (remaining.size === 0) {
-          finish();
-        } else {
-          scheduleRetryTimeout();
-        }
-      });
-    });
   }
 
   private async openProgressView(): Promise<void> {
@@ -1635,7 +1485,12 @@ export class TranscriptionController {
     const markerIndex = content.indexOf(marker);
     if (markerIndex === -1) return null;
 
-    const text = content.substring(markerIndex + marker.length).trim();
+    // A transcription file can now be finalized with unresolved chunks, so strip
+    // the failure placeholders rather than feeding them to the model on reuse.
+    const text = content
+      .substring(markerIndex + marker.length)
+      .replace(/\{\{CHUNK_FAILED:\d+\}\}/g, "")
+      .trim();
     if (text.length === 0) return null;
 
     return { path: file.path, text, category };
@@ -1748,12 +1603,15 @@ export class TranscriptionController {
       });
     };
 
-    if (this.writing) {
-      publishFailure("A transcription is currently running. Try again once it finishes.");
-      return;
-    }
+    // No `this.writing` guard: the session is cleared at the start of every run
+    // and only set once the file has been finalized, so a null session already
+    // covers "a transcription is in flight". Checking `writing` on top of that
+    // would refuse retries during summarization, when the transcription file is
+    // finished and safe to rewrite.
     if (!session) {
-      publishFailure("Retry context is no longer available for this session.");
+      publishFailure(
+        "Retry is unavailable until the transcription file has been written."
+      );
       return;
     }
 
@@ -1784,17 +1642,21 @@ export class TranscriptionController {
     const previousLength = (readChunkBody(currentData, chunkIndex) ?? "").length;
 
     const range = session.chunks[ci];
+    // Skipped ranges have no display slot, so a re-run of one falls back to the
+    // planned numbering rather than inventing a position among the sent chunks.
+    const { displayTotal, displayIndexOf } = buildChunkDisplay(session.chunks);
     const chunkContext: ChunkUsageContext = {
       chunkIndex,
       chunkTotal,
+      displayIndex: displayIndexOf(ci),
+      displayTotal,
       retryable: true,
     };
 
     session.inFlight.add(ci);
     progressBus.publish({
       stage: "chunk-start",
-      chunkIndex,
-      chunkTotal,
+      ...chunkContext,
       startMs: range.startMs,
       endMs: range.endMs,
     });
@@ -1875,6 +1737,8 @@ export class TranscriptionController {
         stage: "chunk-rerun-complete",
         chunkIndex,
         chunkTotal,
+        displayIndex: chunkContext.displayIndex,
+        displayTotal,
         success: true,
         previousLength,
         newLength: trimmedText.length,

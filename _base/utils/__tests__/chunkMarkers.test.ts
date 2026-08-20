@@ -159,3 +159,51 @@ describe("replaceChunkBody", () => {
     expect(hasChunkMarker(twice, 1)).toBe(true);
   });
 });
+
+describe("failed chunks left in a finalized file", () => {
+  it("can be located and replaced later", () => {
+    // A run no longer blocks on failures: the file is finalized with FAILED
+    // placeholders and each chunk is retried from the progress log.
+    let doc = buildDocument(["one", "{{CHUNK_FAILED:2}}", "{{CHUNK_FAILED:3}}"]);
+
+    expect(hasChunkMarker(doc, 2)).toBe(true);
+    expect(hasChunkMarker(doc, 3)).toBe(true);
+
+    // Retrying chunk 2 must not disturb chunk 3's placeholder
+    doc = replaceChunkBody(doc, 2, "second")!;
+    expect(readChunkBody(doc, 2)).toBe("second");
+    expect(readChunkBody(doc, 3)).toBe("{{CHUNK_FAILED:3}}");
+
+    doc = replaceChunkBody(doc, 3, "third")!;
+    expect(readChunkBody(doc, 3)).toBe("third");
+    expect(doc).not.toContain("{{CHUNK_FAILED:");
+  });
+
+  it("has its placeholders stripped when the transcript is reused", () => {
+    // Mirrors findExistingTranscription: the summary must not receive them
+    const doc = buildDocument(["one", "{{CHUNK_FAILED:2}}", "three"]);
+    const reused = doc.replace(/\{\{CHUNK_FAILED:\d+\}\}/g, "").trim();
+
+    expect(reused).not.toContain("CHUNK_FAILED");
+    expect(reused).toContain("one");
+    expect(reused).toContain("three");
+    // Markers survive so retry still works on the file itself
+    expect(hasChunkMarker(doc, 2)).toBe(true);
+  });
+});
+
+describe("skipped chunk bodies", () => {
+  it("can be replaced even though the body is itself a comment", () => {
+    // Skip bodies are wrapped in %% so they stay out of the rendered note
+    const skipBody = "%%[No speech detected — 59:35–1:15:29 skipped]%%";
+    let doc = buildDocument(["spoken", skipBody]);
+
+    expect(readChunkBody(doc, 2)).toBe(skipBody);
+
+    // Retrying the skipped range must swap the whole comment for real text
+    doc = replaceChunkBody(doc, 2, "turns out someone did talk here")!;
+    expect(readChunkBody(doc, 2)).toBe("turns out someone did talk here");
+    expect(doc).not.toContain("No speech detected");
+    expect(readChunkBody(doc, 1)).toBe("spoken");
+  });
+});

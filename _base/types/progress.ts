@@ -9,8 +9,6 @@ export type ProgressStage =
   | "chunk-complete"
   | "chunk-short-response"
   | "chunk-failed"
-  | "chunk-retry-requested"
-  | "chunk-retry-complete"
   | "chunk-rerun-requested"
   | "chunk-rerun-complete"
   | "file-upload-start"
@@ -36,10 +34,23 @@ export type ProgressStage =
   | "error";
 
 /**
+ * Position among the chunks actually sent to the model, which is what the user
+ * is shown. Skipped ranges are excluded, so 4 planned chunks with one skipped
+ * read as "1/3".
+ *
+ * Kept separate from `chunkIndex`, which stays the planned index because file
+ * markers and retry target it — a skipped range still occupies a numbered slot.
+ */
+type ChunkDisplay = { displayIndex?: number; displayTotal?: number };
+
+/**
  * Attached to events that may be emitted either for a single whole-file
  * request (no chunk fields) or as part of a chunk (both fields set).
  */
-type ChunkContext = { chunkIndex?: number; chunkTotal?: number };
+type ChunkContext = {
+  chunkIndex?: number;
+  chunkTotal?: number;
+} & ChunkDisplay;
 
 export type ProgressEvent =
   | { stage: "model-selected"; model: string }
@@ -63,41 +74,36 @@ export type ProgressEvent =
       }[];
     }
   | { stage: "target-file-selected"; path: string; line: number; ch: number }
-  | {
+  | ({
       stage: "chunk-start";
       chunkIndex: number;
       chunkTotal: number;
       startMs: number;
       endMs: number;
-    }
-  | { stage: "chunk-complete"; chunkIndex: number; chunkTotal: number }
-  | {
+    } & ChunkDisplay)
+  | ({
+      stage: "chunk-complete";
+      chunkIndex: number;
+      chunkTotal: number;
+    } & ChunkDisplay)
+  | ({
       stage: "chunk-short-response";
       chunkIndex: number;
       chunkTotal: number;
       charCount: number;
-    }
-  | {
+    } & ChunkDisplay)
+  | ({
       stage: "chunk-failed";
       chunkIndex: number;
       chunkTotal: number;
       message: string;
-    }
-  | { stage: "chunk-retry-requested"; chunkIndex: number }
-  | {
-      stage: "chunk-retry-complete";
-      chunkIndex: number;
-      chunkTotal: number;
-      success: boolean;
-    }
+    } & ChunkDisplay)
   /**
-   * Re-run of a chunk that already succeeded, triggered from the Retry button.
-   * Deliberately distinct from "chunk-retry-requested", which handleChunkRetries
-   * listens for while the run is still waiting on failed chunks — the two must
-   * not trigger each other.
+   * Re-transcribe one chunk, triggered by a Retry button in the progress log.
+   * Covers both a chunk that failed and one that succeeded but looks wrong.
    */
   | { stage: "chunk-rerun-requested"; chunkIndex: number }
-  | {
+  | ({
       stage: "chunk-rerun-complete";
       chunkIndex: number;
       chunkTotal: number;
@@ -105,7 +111,7 @@ export type ProgressEvent =
       message?: string;
       previousLength?: number;
       newLength?: number;
-    }
+    } & ChunkDisplay)
   | ({ stage: "file-upload-start" } & ChunkContext)
   | ({ stage: "file-upload-complete"; elapsedMs: number } & ChunkContext)
   | ({ stage: "api-request-start" } & ChunkContext)

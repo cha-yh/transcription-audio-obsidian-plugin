@@ -63,6 +63,8 @@ interface TranscriptionSession {
   indicatorEl: HTMLElement;
   logHistory: LogEntry[];
   pendingRetryChunks: Set<number>;
+  /** Chunks that failed, so a successful re-run can advance the progress bar. */
+  failedChunks: Set<number>;
   isLogExpanded: boolean;
   isCancellable: boolean;
   audioPath?: string;
@@ -217,18 +219,54 @@ export class TranscriptionProgressView extends ItemView {
   }
 
   /**
-   * "1/4 - " for events belonging to a chunk, empty for whole-file requests.
+   * "1/3 - " for events belonging to a chunk, empty for whole-file requests.
    * Chunks run in parallel, so without this the log lines interleave with no
    * way to tell which chunk each one came from.
+   *
+   * Prefers the display numbering, which counts only the chunks actually sent —
+   * a skipped range should not make three requests read as "of 4".
    */
   private chunkPrefix(e: {
     chunkIndex?: number;
     chunkTotal?: number;
+    displayIndex?: number;
+    displayTotal?: number;
   }): string {
+    if (
+      typeof e.displayIndex === "number" &&
+      typeof e.displayTotal === "number"
+    ) {
+      return `${e.displayIndex}/${e.displayTotal} - `;
+    }
     if (typeof e.chunkIndex !== "number" || typeof e.chunkTotal !== "number") {
       return "";
     }
     return `${e.chunkIndex}/${e.chunkTotal} - `;
+  }
+
+  /**
+   * Maps each planned chunk to its position among the sent chunks, so the
+   * sparkline reads "1 2 skip 3" rather than "1 2 skip 4".
+   */
+  private sentNumbering(chunks: SparklineChunk[]): Map<number, number> {
+    const numbering = new Map<number, number>();
+    let sent = 0;
+    for (const chunk of chunks) {
+      if (chunk.skipped) continue;
+      sent += 1;
+      numbering.set(chunk.chunkIndex, sent);
+    }
+    return numbering;
+  }
+
+  /** Denominator for the chunk progress bar: sent chunks, not planned ones. */
+  private chunkDenominator(e: {
+    chunkTotal: number;
+    displayTotal?: number;
+  }): number {
+    return typeof e.displayTotal === "number" && e.displayTotal > 0
+      ? e.displayTotal
+      : e.chunkTotal;
   }
 
   private pushLog(
@@ -418,13 +456,16 @@ export class TranscriptionProgressView extends ItemView {
     // Chunk numbers only when they fit; the WAV path can plan dozens of chunks
     // and the labels would collide into noise.
     if (data.chunks.length > 0 && data.chunks.length <= MAX_SPARKLINE_LABELS) {
+      const numbering = this.sentNumbering(data.chunks);
       const labels = wrap.createEl("div", {
         cls: "transcription-audio-sparkline-labels",
       });
       for (const chunk of data.chunks) {
         const mid = (toX(chunk.startMs) + toX(chunk.endMs)) / 2;
         const label = labels.createEl("span", {
-          text: chunk.skipped ? "skip" : String(chunk.chunkIndex),
+          text: chunk.skipped
+            ? "skip"
+            : String(numbering.get(chunk.chunkIndex) ?? chunk.chunkIndex),
           cls: chunk.skipped
             ? "transcription-audio-sparkline-label-skip"
             : "transcription-audio-sparkline-label",
@@ -458,6 +499,7 @@ export class TranscriptionProgressView extends ItemView {
     const rows = data.chunks.filter((chunk) => !skippedOnly || chunk.skipped);
     if (rows.length === 0) return;
 
+    const numbering = this.sentNumbering(data.chunks);
     const list = wrap.createEl("div", {
       cls: "transcription-audio-sparkline-rows",
     });
@@ -469,10 +511,11 @@ export class TranscriptionProgressView extends ItemView {
           : "transcription-audio-sparkline-row",
       });
       row.createEl("span", {
-        text: `${chunk.skipped ? "–" : chunk.chunkIndex} ${formatTimeRange(
-          chunk.startMs,
-          chunk.endMs
-        )}`,
+        text: `${
+          chunk.skipped
+            ? "–"
+            : numbering.get(chunk.chunkIndex) ?? chunk.chunkIndex
+        } ${formatTimeRange(chunk.startMs, chunk.endMs)}`,
         cls: "transcription-audio-sparkline-row-label",
       });
 
@@ -672,6 +715,7 @@ export class TranscriptionProgressView extends ItemView {
       indicatorEl,
       logHistory: [{ text: startText }],
       pendingRetryChunks: new Set<number>(),
+      failedChunks: new Set<number>(),
       isLogExpanded: false,
       isCancellable: true,
       audioPath: undefined,
@@ -747,6 +791,11 @@ export class TranscriptionProgressView extends ItemView {
     }
   }
 
+  /**
+   * Standalone retry row for the classification and summarization steps, which
+   * occur once per run. Chunk retries use the per-log-line button instead, since
+   * several chunks can fail and each needs its own control.
+   */
   private addRetryButton(
     session: TranscriptionSession,
     label: string,
@@ -771,17 +820,6 @@ export class TranscriptionProgressView extends ItemView {
 
     // Listen for result to re-enable or remove — register for auto-cleanup on view close
     const unsubscribe = progressBus.subscribe((event) => {
-      // Chunk retry result
-      if (event.stage === "chunk-retry-complete") {
-        if (event.success) {
-          retryRow.remove();
-          unsubscribe();
-        } else {
-          retryBtn.disabled = false;
-          retryBtn.setText("Retry");
-        }
-        return;
-      }
       // Classification/Summarization success — remove retry row
       if (
         event.stage === "classification-step-complete" ||
@@ -967,8 +1005,8 @@ export class TranscriptionProgressView extends ItemView {
           this.currentSession.chunkBarEl.max = 1;
           this.currentSession.chunkBarEl.value = 0;
         }
-        this.currentSession.chunkTotal = e.chunkTotal;
-        this.currentSession.chunkIndex = e.chunkIndex;
+        this.currentSession.chunkTotal = this.chunkDenominator(e);
+        this.currentSession.chunkIndex = e.displayIndex ?? e.chunkIndex;
         const rangeText = formatTimeRange(e.startMs, e.endMs);
         if (
           this.currentSession.chunkBarEl &&
@@ -980,7 +1018,7 @@ export class TranscriptionProgressView extends ItemView {
             this.currentSession.chunkIndex - 1
           );
           this.currentSession.chunkLabelEl.setText(
-            `Chunk ${e.chunkIndex}/${e.chunkTotal} running: ${rangeText}`
+            `Chunk ${this.currentSession.chunkIndex}/${this.currentSession.chunkTotal} running: ${rangeText}`
           );
         }
         this.currentSession.statusEl.setText("Transcribing chunk");
@@ -1000,11 +1038,13 @@ export class TranscriptionProgressView extends ItemView {
           this.currentSession.chunkBarEl &&
           this.currentSession.chunkLabelEl
         ) {
-          this.currentSession.chunkBarEl.max = e.chunkTotal;
+          this.currentSession.chunkBarEl.max = this.chunkDenominator(e);
           this.currentSession.chunkBarEl.value =
             this.currentSession.chunksCompleted;
           this.currentSession.chunkLabelEl.setText(
-            `${this.currentSession.chunksCompleted}/${e.chunkTotal} done`
+            `${this.currentSession.chunksCompleted}/${this.chunkDenominator(
+              e
+            )} done`
           );
         }
         this.pushLog(
@@ -1029,53 +1069,15 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
+        this.currentSession.failedChunks.add(e.chunkIndex);
+        // The Retry button rides on the log line itself, so several failed
+        // chunks each keep their own control.
         this.pushLog(
           `${this.chunkPrefix(e)}Chunk failed`,
           `${this.chunkPrefix(e)}Chunk failed: ${e.message}`,
-          this.currentSession
-        );
-
-        this.addRetryButton(
           this.currentSession,
-          `Chunk ${e.chunkIndex} failed`,
-          () => {
-            progressBus.publish({
-              stage: "chunk-retry-requested",
-              chunkIndex: e.chunkIndex,
-            });
-          }
+          { retryChunkIndex: e.chunkIndex }
         );
-        break;
-      }
-      case "chunk-retry-complete": {
-        if (!this.currentSession) {
-          break;
-        }
-        if (e.success) {
-          this.currentSession.chunksCompleted++;
-          this.pushLog(
-            `${this.chunkPrefix(e)}Chunk retry succeeded`,
-            `${this.chunkPrefix(e)}Chunk retry succeeded`,
-            this.currentSession,
-            { retryChunkIndex: e.chunkIndex }
-          );
-          if (
-            this.currentSession.chunkBarEl &&
-            this.currentSession.chunkLabelEl
-          ) {
-            this.currentSession.chunkBarEl.value =
-              this.currentSession.chunksCompleted;
-            this.currentSession.chunkLabelEl.setText(
-              `${this.currentSession.chunksCompleted}/${e.chunkTotal} done`
-            );
-          }
-        } else {
-          this.pushLog(
-            `${this.chunkPrefix(e)}Chunk retry failed`,
-            `${this.chunkPrefix(e)}Chunk retry failed`,
-            this.currentSession
-          );
-        }
         break;
       }
       case "chunk-rerun-complete": {
@@ -1083,6 +1085,16 @@ export class TranscriptionProgressView extends ItemView {
           break;
         }
         this.settleRetryButtons(this.currentSession, e.chunkIndex);
+
+        // Recovering a failed chunk is real progress; re-running one that had
+        // already succeeded is not, so only the former moves the counter.
+        if (e.success && this.currentSession.failedChunks.delete(e.chunkIndex)) {
+          this.currentSession.chunksCompleted++;
+          if (this.currentSession.chunkBarEl) {
+            this.currentSession.chunkBarEl.value =
+              this.currentSession.chunksCompleted;
+          }
+        }
 
         // chunk-start put the bar label into "running" and the status into
         // "Transcribing chunk"; a re-run emits no chunk-complete, so restore
@@ -1092,7 +1104,9 @@ export class TranscriptionProgressView extends ItemView {
         );
         if (this.currentSession.chunkLabelEl) {
           this.currentSession.chunkLabelEl.setText(
-            `${this.currentSession.chunksCompleted}/${e.chunkTotal} done`
+            `${this.currentSession.chunksCompleted}/${this.chunkDenominator(
+              e
+            )} done`
           );
         }
 
