@@ -22,7 +22,9 @@ jobs:
         run: |
           corepack enable
           yarn install --immutable
+          yarn test
           yarn build
+          yarn check:mobile
 
       - name: Create release
         env:

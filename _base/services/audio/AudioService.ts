@@ -3,45 +3,20 @@ import {
   SpeechActivityResult,
 } from "../../utils/speechActivity";
 
+export interface WavHeader {
+  audioFormat: number;
+  numChannels: number;
+  sampleRate: number;
+  bitsPerSample: number;
+  dataOffset: number;
+  dataSize: number;
+}
+
+/** Every WAV this plugin writes uses the canonical 44-byte header. */
+const WAV_HEADER_BYTES = 44;
+
 export class AudioService {
-  arrayBufferToBase64(buffer: ArrayBuffer): string {
-    let binary = "";
-    const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return window.btoa(binary);
-  }
-
-  async arrayBufferToBase64Async(buffer: ArrayBuffer): Promise<string> {
-    return await new Promise<string>((resolve, reject) => {
-      try {
-        const blob = new Blob([buffer]);
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result as string;
-          const commaIndex = dataUrl.indexOf(",");
-          resolve(
-            commaIndex >= 0 ? dataUrl.substring(commaIndex + 1) : dataUrl
-          );
-        };
-        reader.onerror = (e) => reject(e);
-        reader.readAsDataURL(blob);
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }
-
-  parseWavHeader(buffer: ArrayBuffer): {
-    audioFormat: number;
-    numChannels: number;
-    sampleRate: number;
-    bitsPerSample: number;
-    dataOffset: number;
-    dataSize: number;
-  } {
+  parseWavHeader(buffer: ArrayBuffer): WavHeader {
     const view = new DataView(buffer);
     const readTag = (offset: number) =>
       String.fromCharCode(
@@ -135,6 +110,54 @@ export class AudioService {
     startMs: number,
     endMs?: number
   ): ArrayBuffer {
+    const header = this.parseWavHeader(buffer);
+    const { startByte, dataSize } = this.computeWavSliceBytes(
+      header,
+      startMs,
+      endMs
+    );
+
+    const out = new ArrayBuffer(WAV_HEADER_BYTES + dataSize);
+    this.writeWavHeader(new DataView(out), header, dataSize);
+
+    const src = new Uint8Array(buffer, startByte, dataSize);
+    new Uint8Array(out, WAV_HEADER_BYTES, dataSize).set(src);
+
+    return out;
+  }
+
+  /**
+   * Same slice as sliceWavPcm16, but the audio is referenced rather than
+   * copied: only the 44-byte header is allocated and the rest is a Blob view of
+   * the source. A 20 minute chunk costs 38 MB as an ArrayBuffer and nothing
+   * here, which is what makes several chunks in flight affordable on a phone.
+   */
+  sliceWavPcm16ToBlob(
+    wav: Blob,
+    header: WavHeader,
+    startMs: number,
+    endMs?: number
+  ): Blob {
+    const { startByte, endByte, dataSize } = this.computeWavSliceBytes(
+      header,
+      startMs,
+      endMs
+    );
+
+    const headerBuffer = new ArrayBuffer(WAV_HEADER_BYTES);
+    this.writeWavHeader(new DataView(headerBuffer), header, dataSize);
+
+    return new Blob([headerBuffer, wav.slice(startByte, endByte)], {
+      type: "audio/wav",
+    });
+  }
+
+  /** Byte range of [startMs, endMs) within a PCM16 WAV's data section. */
+  private computeWavSliceBytes(
+    header: WavHeader,
+    startMs: number,
+    endMs?: number
+  ): { startByte: number; endByte: number; dataSize: number } {
     const {
       audioFormat,
       numChannels,
@@ -142,7 +165,7 @@ export class AudioService {
       bitsPerSample,
       dataOffset,
       dataSize,
-    } = this.parseWavHeader(buffer);
+    } = header;
 
     if (audioFormat !== 1 || bitsPerSample !== 16) {
       throw new Error(
@@ -150,8 +173,7 @@ export class AudioService {
       );
     }
 
-    const bytesPerSample = bitsPerSample / 8;
-    const bytesPerFrame = numChannels * bytesPerSample;
+    const bytesPerFrame = numChannels * (bitsPerSample / 8);
     const totalFrames = Math.floor(dataSize / bytesPerFrame);
     const totalMs = Math.floor((totalFrames / sampleRate) * 1000);
 
@@ -159,19 +181,25 @@ export class AudioService {
     const eMs =
       endMs == null ? totalMs : Math.max(sMs, Math.min(endMs, totalMs));
 
-    const startFrame = Math.floor((sMs / 1000) * sampleRate);
-    const endFrame = Math.floor((eMs / 1000) * sampleRate);
+    const startByte =
+      dataOffset + Math.floor((sMs / 1000) * sampleRate) * bytesPerFrame;
+    const endByte =
+      dataOffset + Math.floor((eMs / 1000) * sampleRate) * bytesPerFrame;
 
-    const startByte = dataOffset + startFrame * bytesPerFrame;
-    const endByte = dataOffset + endFrame * bytesPerFrame;
+    return { startByte, endByte, dataSize: Math.max(0, endByte - startByte) };
+  }
 
-    const newDataSize = Math.max(0, endByte - startByte);
-    const out = new ArrayBuffer(44 + newDataSize);
-    const view = new DataView(out);
+  /** Writes the 44-byte canonical PCM16 header describing `dataSize` bytes. */
+  private writeWavHeader(
+    view: DataView,
+    header: Pick<WavHeader, "numChannels" | "sampleRate" | "bitsPerSample">,
+    dataSize: number
+  ): void {
+    const { numChannels, sampleRate, bitsPerSample } = header;
+    const bytesPerFrame = numChannels * (bitsPerSample / 8);
 
-    // Write header
     this.writeString(view, 0, "RIFF");
-    view.setUint32(4, 36 + newDataSize, true);
+    view.setUint32(4, 36 + dataSize, true);
     this.writeString(view, 8, "WAVE");
     this.writeString(view, 12, "fmt ");
     view.setUint32(16, 16, true);
@@ -182,36 +210,18 @@ export class AudioService {
     view.setUint16(32, bytesPerFrame, true);
     view.setUint16(34, bitsPerSample, true);
     this.writeString(view, 36, "data");
-    view.setUint32(40, newDataSize, true);
-
-    // Copy data
-    const src = new Uint8Array(buffer, startByte, newDataSize);
-    const dst = new Uint8Array(out, 44, newDataSize);
-    dst.set(src);
-
-    return out;
-  }
-
-  async getAudioDurationMs(audioBuffer: ArrayBuffer): Promise<number> {
-    const audioContext = new AudioContext();
-    try {
-      await audioContext.resume();
-      const decodedBuffer = await audioContext.decodeAudioData(
-        audioBuffer.slice(0)
-      );
-      return Math.floor(decodedBuffer.duration * 1000);
-    } finally {
-      await audioContext.close();
-    }
+    view.setUint32(40, dataSize, true);
   }
 
   async decodeToWavPcm16(
     audioBuffer: ArrayBuffer,
     targetSampleRate: number = 16000
   ): Promise<{ wavBuffer: ArrayBuffer; durationMs: number }> {
+    // Not resumed on purpose: decodeAudioData works on a suspended context, and
+    // resume() waits for a user gesture on iOS — where it does not reject, it
+    // stays pending, leaving the run stuck with nothing to show for it.
     const audioContext = new AudioContext();
     try {
-      await audioContext.resume();
       const decodedBuffer = await audioContext.decodeAudioData(
         audioBuffer.slice(0)
       );
@@ -248,27 +258,13 @@ export class AudioService {
   ): ArrayBuffer {
     const numChannels = 1;
     const bitsPerSample = 16;
-    const bytesPerSample = bitsPerSample / 8;
-    const bytesPerFrame = numChannels * bytesPerSample;
-    const dataSize = pcmData.length * bytesPerSample;
-    const buffer = new ArrayBuffer(44 + dataSize);
+    const dataSize = pcmData.length * (bitsPerSample / 8);
+    const buffer = new ArrayBuffer(WAV_HEADER_BYTES + dataSize);
     const view = new DataView(buffer);
 
-    this.writeString(view, 0, "RIFF");
-    view.setUint32(4, 36 + dataSize, true);
-    this.writeString(view, 8, "WAVE");
-    this.writeString(view, 12, "fmt ");
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * bytesPerFrame, true);
-    view.setUint16(32, bytesPerFrame, true);
-    view.setUint16(34, bitsPerSample, true);
-    this.writeString(view, 36, "data");
-    view.setUint32(40, dataSize, true);
+    this.writeWavHeader(view, { numChannels, sampleRate, bitsPerSample }, dataSize);
 
-    let offset = 44;
+    let offset = WAV_HEADER_BYTES;
     for (let i = 0; i < pcmData.length; i++) {
       const s = Math.max(-1, Math.min(1, pcmData[i]));
       view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);

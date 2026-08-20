@@ -67,8 +67,6 @@ vi.mock("../../_base/services/audio/AudioService", () => ({
   AudioService: class {
     parseWavHeader = vi.fn();
     sliceWavPcm16 = vi.fn();
-    arrayBufferToBase64Async = vi.fn();
-    getAudioDurationMs = vi.fn();
     decodeToWavPcm16 = vi.fn();
   },
 }));

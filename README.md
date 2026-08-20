@@ -24,6 +24,29 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 
 - A Google AI API key for Gemini. You can obtain one at [https://aistudio.google.com/api-keys](https://aistudio.google.com/api-keys)
 
+## Platform support
+
+| Platform | Status |
+| --- | --- |
+| Desktop (Windows / macOS / Linux) | Supported |
+| Android | Supported — verified on Android 16 (Galaxy S25) |
+| iOS / iPadOS | Should work, but not verified on a device yet |
+
+Transcription runs the same way everywhere: the same decoding, chunking and
+upload path, with no feature held back on mobile.
+
+Two things to keep in mind on a phone or tablet:
+
+- Long recordings in a compressed format (m4a, mp3) have to be decoded in
+  memory before they can be split. A device with little free memory may
+  struggle where a desktop would not.
+- Uploading happens over your connection at full file size. A long recording on
+  a mobile network can take a while, and the plugin does not resume an upload
+  that was interrupted.
+
+Versions before 0.7.2 crash on mobile with `Buffer is not defined`
+([#3](https://github.com/cha-yh/transcription-audio-obsidian-plugin/issues/3)).
+
 ## Getting started
 
 1. Open Obsidian Settings

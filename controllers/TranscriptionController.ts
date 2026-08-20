@@ -7,6 +7,7 @@ import {
   isTranscriptionCancelledError,
   isTranscriptionQuotaError,
   UploadedFileInfo,
+  TranscriptionAudioSource,
 } from "../_base/services/transcription/TranscriptionService";
 import {
   computeWavChunkRanges,
@@ -19,6 +20,8 @@ import {
   speechRatioInRange,
 } from "../_base/utils/speechActivity";
 import { progressBus } from "../_base/utils/progressBus";
+import { toBlob } from "../_base/utils/blob";
+import { runWithConcurrency } from "../_base/utils/concurrency";
 import {
   hasChunkMarker,
   readChunkBody,
@@ -26,7 +29,7 @@ import {
   wrapChunkBody,
 } from "../_base/utils/chunkMarkers";
 import { ObsidianFileService } from "_base/services/obsidian/obsidianFileService";
-import { AudioService } from "../_base/services/audio/AudioService";
+import { AudioService, WavHeader } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
 import {
   DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
@@ -38,6 +41,12 @@ const CHUNK_TRANSCRIPTION_PROMPT =
   "Transcribe the following audio. Output only the transcript text for this part, without any extra commentary.";
 /** How long the classification/summarization steps wait for a manual retry. */
 const RETRY_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * How many chunks are transcribed at once. Unbounded parallelism started every
+ * upload in the same tick, which a phone cannot hold and which spends the
+ * Gemini rate limit in a burst — one quota error cancels the whole run.
+ */
+const MAX_CONCURRENT_CHUNKS = 4;
 function formatStamp(ms: number): string {
   const total = Math.floor(ms / 1000);
   const h = Math.floor(total / 3600);
@@ -423,20 +432,16 @@ export class TranscriptionController {
                 startMs: c.startMs,
                 endMs: c.endMs,
               });
-              const chunkBuffer = this.audioService.sliceWavPcm16(
-                audioBuffer,
-                c.startMs,
-                c.endMs
+              const chunkBlob = toBlob(
+                this.audioService.sliceWavPcm16(audioBuffer, c.startMs, c.endMs),
+                "audio/wav"
               );
               const preface = `\n\n[Part ${index}/${chunks.length}]\n`;
               try {
-                const chunkBase64 =
-                  await this.audioService.arrayBufferToBase64Async(chunkBuffer);
                 const result = await this.transcriptionService.transcribe(
                   apiKey!,
                   CHUNK_TRANSCRIPTION_PROMPT,
-                  chunkBase64,
-                  "audio/wav",
+                  { kind: "upload", blob: chunkBlob, mimeType: "audio/wav" },
                   model,
                   6 * 60 * 1000,
                   () => {
@@ -569,15 +574,16 @@ export class TranscriptionController {
                 // Under 30 minutes: single request with original file.
                 // No chunk ranges to report, but the profile is still useful.
                 this.publishSpeechProfile(wavBuffer!, [], totalMs);
+                // The upload below sends the original file, so the decoded copy
+                // is done with — releasing it before a request that can run for
+                // minutes keeps it off the heap for that whole time.
+                wavBuffer = null;
 
-                const audioBase64 =
-                  await this.audioService.arrayBufferToBase64Async(audioBuffer);
                 const transcriptionResult =
                   await this.transcriptionService.transcribe(
                     apiKey!,
                     DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-                    audioBase64,
-                    mimeType,
+                    { kind: "upload", blob: toBlob(audioBuffer, mimeType), mimeType },
                     model,
                     6 * 60 * 1000,
                     () => {
@@ -645,6 +651,13 @@ export class TranscriptionController {
                   1500
                 );
 
+                // Chunks are cut from the Blob, not the ArrayBuffer: each
+                // slice then references the audio instead of copying it. The
+                // buffer is released here because planning was its last reader.
+                const wavHeader = this.audioService.parseWavHeader(wavBuffer!);
+                const wavBlob = new Blob([wavBuffer!], { type: "audio/wav" });
+                wavBuffer = null;
+
                 const PENDING_PREFIX = "{{CHUNK_PENDING:";
                 const FAILED_PREFIX = "{{CHUNK_FAILED:";
                 const PLACEHOLDER_SUFFIX = "}}";
@@ -687,17 +700,18 @@ export class TranscriptionController {
                 const { displayTotal, displayIndexOf } =
                   buildChunkDisplay(chunks);
 
-                // Launch all chunks in parallel; skipped ranges never reach
-                // the model and are already written into the temp file.
-                const chunkPromises = chunks
+                // Chunks run a few at a time; skipped ranges never reach the
+                // model and are already written into the temp file.
+                const chunkTasks = chunks
                   .map((c, ci) => ({ c, ci }))
                   .filter(({ c }) => !c.skipped)
-                  .map(({ c, ci }) =>
+                  .map(({ c, ci }) => () =>
                     this.processChunk({
                       ci,
                       chunk: c,
                       chunkTotal: chunks.length,
-                      wavBuffer: wavBuffer!,
+                      wavBlob: wavBlob!,
+                      wavHeader: wavHeader!,
                       apiKey: apiKey!,
                       model,
                       chunkResults,
@@ -713,7 +727,10 @@ export class TranscriptionController {
                     })
                   );
 
-                const chunkSettled = await Promise.allSettled(chunkPromises);
+                const chunkSettled = await runWithConcurrency(
+                  chunkTasks,
+                  MAX_CONCURRENT_CHUNKS
+                );
                 throwIfCancelled();
 
                 // Check for quota errors — rethrow to cancel entire flow
@@ -853,13 +870,10 @@ export class TranscriptionController {
 
             } // end if (!transcriptionOnly)
           } else {
-            const audioBase64 =
-              await this.audioService.arrayBufferToBase64Async(audioBuffer);
             const result = await this.transcriptionService.transcribe(
               apiKey!,
               templateModePrompt,
-              audioBase64,
-              mimeType,
+              { kind: "upload", blob: toBlob(audioBuffer, mimeType), mimeType },
               model,
               6 * 60 * 1000,
               () => {
@@ -1217,7 +1231,8 @@ export class TranscriptionController {
     ci: number;
     chunk: { startMs: number; endMs: number };
     chunkTotal: number;
-    wavBuffer: ArrayBuffer;
+    wavBlob: Blob;
+    wavHeader: WavHeader;
     apiKey: string;
     model: string;
     chunkResults: string[];
@@ -1238,7 +1253,8 @@ export class TranscriptionController {
       ci,
       chunk: c,
       chunkTotal,
-      wavBuffer,
+      wavBlob,
+      wavHeader,
       apiKey,
       model,
       chunkResults,
@@ -1263,6 +1279,13 @@ export class TranscriptionController {
     };
     const failedPlaceholder = `${failedPrefix}${chunkIndex}${placeholderSuffix}`;
 
+    // Queued chunks can still be waiting when the run is cancelled. Without
+    // this they would announce themselves and cut their audio first, only to
+    // die on the upload.
+    if (abortSignal.aborted) {
+      throw new TranscriptionCancelledError();
+    }
+
     progressBus.publish({
       stage: "chunk-start",
       ...chunkContext,
@@ -1270,20 +1293,18 @@ export class TranscriptionController {
       endMs: c.endMs,
     });
 
-    const chunkBuffer = this.audioService.sliceWavPcm16(
-      wavBuffer,
+    const chunkBlob = this.audioService.sliceWavPcm16ToBlob(
+      wavBlob,
+      wavHeader,
       c.startMs,
       c.endMs
     );
 
     try {
-      const chunkBase64 =
-        await this.audioService.arrayBufferToBase64Async(chunkBuffer);
       const result = await this.transcriptionService.transcribe(
         apiKey,
         DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-        chunkBase64,
-        "audio/wav",
+        { kind: "upload", blob: chunkBlob, mimeType: "audio/wav" },
         model,
         6 * 60 * 1000,
         () => {
@@ -1562,10 +1583,10 @@ export class TranscriptionController {
    * uploaded file has expired — otherwise the cached URI is reused and the
    * audio never has to be decoded again.
    */
-  private async buildChunkBase64(
+  private async buildChunkBlob(
     audioPath: string,
     range: { startMs: number; endMs: number }
-  ): Promise<string> {
+  ): Promise<Blob> {
     const audioFile = this.app.vault.getAbstractFileByPath(audioPath);
     if (!(audioFile instanceof TFile)) {
       throw new Error(`Original audio file not found: ${audioPath}`);
@@ -1576,12 +1597,10 @@ export class TranscriptionController {
     const wavBuffer = this.isPcm16Wav(buffer)
       ? buffer
       : (await this.audioService.decodeToWavPcm16(buffer)).wavBuffer;
-    const chunkBuffer = this.audioService.sliceWavPcm16(
-      wavBuffer,
-      range.startMs,
-      range.endMs
+    return toBlob(
+      this.audioService.sliceWavPcm16(wavBuffer, range.startMs, range.endMs),
+      "audio/wav"
     );
-    return this.audioService.arrayBufferToBase64Async(chunkBuffer);
   }
 
   /**
@@ -1663,18 +1682,20 @@ export class TranscriptionController {
 
     try {
       const cached = session.uploadedFiles[ci];
-      const cachedFile = this.isUploadedFileValid(cached) ? cached! : undefined;
-      // transcribe() ignores the base64 payload entirely when cachedFile is
-      // set, so the decode is skipped on the common path.
-      const audioBase64 = cachedFile
-        ? ""
-        : await this.buildChunkBase64(session.audioPath, range);
+      // Rebuilding the chunk re-reads and re-decodes the whole file, so it only
+      // happens when the cached upload is gone.
+      const audio: TranscriptionAudioSource = this.isUploadedFileValid(cached)
+        ? { kind: "cached", file: cached! }
+        : {
+            kind: "upload",
+            blob: await this.buildChunkBlob(session.audioPath, range),
+            mimeType: "audio/wav",
+          };
 
       const result = await this.transcriptionService.transcribe(
         session.apiKey,
         DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-        audioBase64,
-        "audio/wav",
+        audio,
         session.model,
         6 * 60 * 1000,
         () => {
@@ -1699,8 +1720,7 @@ export class TranscriptionController {
           });
         },
         undefined,
-        true,
-        cachedFile
+        true
       );
 
       if (result.uploadedFile) {

@@ -245,7 +245,9 @@ class TranscriptionSettingTab extends PluginSettingTab {
   }
 
   private async confirmReset(message: string): Promise<boolean> {
-    return window.confirm(message);
+    return new Promise<boolean>((resolve) => {
+      new ConfirmModal(this.app, message, "Reset", resolve).open();
+    });
   }
 
   private addInlineResetButton(
@@ -634,6 +636,56 @@ class TranscriptionSettingTab extends PluginSettingTab {
   }
 }
 
+/**
+ * Yes/no prompt built on Obsidian's Modal.
+ *
+ * window.confirm is not answerable in every WebView Obsidian runs in — where it
+ * is ignored it returns false, which reads as "the user declined" and silently
+ * does nothing.
+ */
+class ConfirmModal extends Modal {
+  private resolved = false;
+
+  constructor(
+    app: App,
+    private message: string,
+    private confirmLabel: string,
+    private onDecision: (confirmed: boolean) => void
+  ) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("p", { text: this.message });
+
+    const buttons = contentEl.createDiv({
+      cls: "transcription-audio-modal-buttons",
+    });
+
+    const cancelBtn = buttons.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => this.finish(false));
+
+    const confirmBtn = buttons.createEl("button", { text: this.confirmLabel });
+    confirmBtn.addClass("mod-warning");
+    confirmBtn.addEventListener("click", () => this.finish(true));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    // Dismissing the modal any other way counts as declining.
+    this.finish(false);
+  }
+
+  private finish(confirmed: boolean): void {
+    if (this.resolved) return;
+    this.resolved = true;
+    this.onDecision(confirmed);
+    this.close();
+  }
+}
+
 class CategoryEditModal extends Modal {
   constructor(
     app: App,
@@ -690,9 +742,14 @@ class CategoryEditModal extends Modal {
         text: "Reset prompt to default",
       });
       resetBtn.addEventListener("click", async () => {
-        const confirmed = window.confirm(
-          `Reset "${this.cat.name}" prompt to default?`
-        );
+        const confirmed = await new Promise<boolean>((resolve) => {
+          new ConfirmModal(
+            this.app,
+            `Reset "${this.cat.name}" prompt to default?`,
+            "Reset",
+            resolve
+          ).open();
+        });
         if (!confirmed) return;
         this.cat.prompt = this.defaultCat!.prompt;
         this.cat.enabled = true;

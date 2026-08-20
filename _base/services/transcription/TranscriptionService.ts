@@ -28,6 +28,15 @@ export interface UploadedFileInfo {
   expirationTime?: string;
 }
 
+/**
+ * What to transcribe: bytes that still need uploading, or a file already on
+ * Google's side. Modelled as a union so "cached, no payload" cannot be spelled
+ * as an empty payload alongside a cached file.
+ */
+export type TranscriptionAudioSource =
+  | { kind: "upload"; blob: Blob; mimeType: string }
+  | { kind: "cached"; file: UploadedFileInfo };
+
 export class TranscriptionCancelledError extends Error {
   constructor() {
     super("Transcription was cancelled by user.");
@@ -446,8 +455,7 @@ export class TranscriptionService {
   async transcribe(
     apiKey: string,
     prompt: string,
-    audioBase64: string,
-    mimeType: string,
+    audio: TranscriptionAudioSource,
     model: string,
     timeoutMs: number = 6 * 60 * 1000,
     onFileUploadStart?: () => void,
@@ -455,8 +463,7 @@ export class TranscriptionService {
     onApiRequestStart?: () => void,
     onApiRequestComplete?: (elapsedMs: number) => void,
     abortSignal?: AbortSignal,
-    disableThinking?: boolean,
-    cachedFile?: UploadedFileInfo
+    disableThinking?: boolean
   ): Promise<TranscriptionResult> {
     if (!apiKey) {
       throw new Error("API Key is not provided.");
@@ -467,23 +474,17 @@ export class TranscriptionService {
 
       let uploadedFile: UploadedFileInfo;
 
-      if (cachedFile) {
+      if (audio.kind === "cached") {
         // Reuse cached file URI — skip upload
-        uploadedFile = cachedFile;
+        uploadedFile = audio.file;
       } else {
-        // convert base64 to Buffer and then to Blob
-        const audioBuffer = Buffer.from(audioBase64, "base64");
-        const audioBlob = new Blob([audioBuffer], {
-          type: mimeType || "application/octet-stream",
-        });
-
         // upload file to Google Gen AI
         const uploadStartAt = performance.now();
         onFileUploadStart?.();
         uploadedFile = await this.uploadFileResumable(
           apiKey,
-          audioBlob,
-          mimeType || "application/octet-stream",
+          audio.blob,
+          audio.mimeType || "application/octet-stream",
           timeoutMs,
           abortSignal
         );
