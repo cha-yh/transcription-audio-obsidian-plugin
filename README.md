@@ -65,25 +65,25 @@ Audio content is sent to Google’s Gemini API for processing. The plugin does n
 
 ## Changelog
 
-### Version 0.7.0
+### Version 0.7.1
 
-<img width="425" height="234" alt="Speech activity sparkline with chunk boundaries and a skipped range" src="https://github.com/user-attachments/assets/5a72875c-ffd3-4b6c-9ce0-dbf1449ed264" />
+- **Failed chunks no longer discard the run**
+  - A chunk that fails stays in the transcription file as a placeholder and the run finalizes normally, so every chunk that already succeeded survives
+  - Retry has no deadline — the Retry button on the chunk's log line re-runs it whenever you get to it, including while summarization is still running
+  - Fixed a second failed chunk becoming impossible to retry once the first one had succeeded
+- **Model updates**
+  - Added `gemini-3.7-flash` (the new default), `gemini-3.6-flash`, and `gemini-3.5-flash-lite`, listed newest first
+  - Removed `gemini-2.5-flash` and `gemini-2.5-pro`; a setting still pointing at either falls back to the default
+- **Fixes**
+  - Progress counts only the chunks actually sent, so a skipped range no longer inflates the numbering
+  - Skipped ranges no longer show their `[No speech detected ...]` note in reading view
+
+### Version 0.7.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.7.0)
 
 - **Speech-aware chunking**
-  - Detects where speech actually occurs and plans chunks around it, so silent stretches are never sent to the model
-  - Long silences split the recording into speech islands chunked independently, keeping a late remark after a long gap without dragging the gap along
-  - Skipped ranges are recorded in the transcription file and can be transcribed later
 - **Per-chunk retry**
-  - Each chunk's log line gains a Retry button that re-runs only that chunk and rewrites only its region, leaving manual edits to other chunks intact
-  - Reuses the uploaded file when it is still valid, so most retries skip the upload entirely
 - **Progress log**
-  - Added a sparkline showing speech activity, chunk boundaries, skipped ranges, and a per-chunk timeline
-  - Log lines are prefixed with the chunk number and carry the chunk's time range, so parallel chunks can be told apart
 - **Fixes**
-  - Trailing chunks shorter than two minutes now fold into the previous chunk instead of costing a request that returns nothing
-  - Fixed a `removeChild` error when the progress view was open while the plugin was disabled
-  - Disabling the plugin no longer discards the progress view's sidebar placement
-  - Transcript text containing `$&` or `` $` `` is no longer mangled when written to the transcription file
 
 ### Version 0.6.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.6.0)
 
