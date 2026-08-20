@@ -172,7 +172,7 @@ export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
 
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
   mode: "basic",
-  model: "gemini-3-flash-preview",
+  model: "gemini-3.7-flash",
   secretApiKeyName: "",
   enableTemplatePrompt: false,
   templatePrompt: DEFAULT_TEMPLATE_MODE_PROMPT,
@@ -183,11 +183,12 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
 };
 
 export const MODELS: string[] = [
-  "gemini-2.5-flash",
-  "gemini-2.5-pro",
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
   "gemini-3.1-pro-preview",
   "gemini-3-flash-preview",
-  "gemini-3.5-flash",
 ];
 
 export const MODEL_MIGRATIONS: Record<string, string> = {

@@ -108,7 +108,7 @@ function mockFileUpload() {
 describe("TranscriptionService", () => {
   const service = new TranscriptionService();
   const apiKey = "test-key";
-  const model = "gemini-2.5-flash";
+  const model = "gemini-3.7-flash";
 
   describe("transcribe", () => {
     it("returns text, usage, and uploadedFile on success", async () => {

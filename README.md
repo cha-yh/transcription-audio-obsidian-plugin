@@ -42,7 +42,7 @@ Open Settings → Transcription Audio:
   - Prompt only mode (default): sends audio directly with the configured prompt
   - Transcription mode: transcribes audio first, then summarizes the raw transcript
   - Transcription only mode: creates the raw transcript and skips summarization
-- Model: Select a Gemini-compatible model (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.5-flash`)
+- Model: Select a Gemini-compatible model (`gemini-3.7-flash`(default), `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
 - Prompt: Customize the instruction for Prompt only mode and transcript summarization
 - Template prompt: Toggle in Prompt only mode to show Instructions and Output template fields for a consistent final markdown structure
