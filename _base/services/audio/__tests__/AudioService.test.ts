@@ -1,43 +1,11 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { AudioService } from "../AudioService";
 import {
   createTestWavBuffer,
   createNonPcm16WavBuffer,
 } from "../../../../tests/helpers/createTestWavBuffer";
 
-// Polyfill window.btoa for Node environment
-beforeAll(() => {
-  if (typeof globalThis.window === "undefined") {
-    (globalThis as any).window = {};
-  }
-  if (typeof globalThis.window.btoa === "undefined") {
-    (globalThis as any).window.btoa = (str: string) =>
-      Buffer.from(str, "binary").toString("base64");
-  }
-});
-
 const audio = new AudioService();
-
-describe("arrayBufferToBase64", () => {
-  it("encodes known bytes correctly", () => {
-    const buf = new Uint8Array([72, 101, 108, 108, 111]).buffer; // "Hello"
-    expect(audio.arrayBufferToBase64(buf)).toBe(
-      Buffer.from("Hello").toString("base64")
-    );
-  });
-
-  it("encodes empty buffer", () => {
-    const buf = new ArrayBuffer(0);
-    expect(audio.arrayBufferToBase64(buf)).toBe("");
-  });
-
-  it("round-trips binary data", () => {
-    const bytes = new Uint8Array([0, 1, 127, 128, 255]);
-    const b64 = audio.arrayBufferToBase64(bytes.buffer);
-    const decoded = Buffer.from(b64, "base64");
-    expect(new Uint8Array(decoded)).toEqual(bytes);
-  });
-});
 
 describe("parseWavHeader", () => {
   it("parses a valid WAV header", () => {

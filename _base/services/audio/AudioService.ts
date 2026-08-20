@@ -4,36 +4,6 @@ import {
 } from "../../utils/speechActivity";
 
 export class AudioService {
-  arrayBufferToBase64(buffer: ArrayBuffer): string {
-    let binary = "";
-    const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return window.btoa(binary);
-  }
-
-  async arrayBufferToBase64Async(buffer: ArrayBuffer): Promise<string> {
-    return await new Promise<string>((resolve, reject) => {
-      try {
-        const blob = new Blob([buffer]);
-        const reader = new FileReader();
-        reader.onload = () => {
-          const dataUrl = reader.result as string;
-          const commaIndex = dataUrl.indexOf(",");
-          resolve(
-            commaIndex >= 0 ? dataUrl.substring(commaIndex + 1) : dataUrl
-          );
-        };
-        reader.onerror = (e) => reject(e);
-        reader.readAsDataURL(blob);
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }
-
   parseWavHeader(buffer: ArrayBuffer): {
     audioFormat: number;
     numChannels: number;
@@ -192,26 +162,15 @@ export class AudioService {
     return out;
   }
 
-  async getAudioDurationMs(audioBuffer: ArrayBuffer): Promise<number> {
-    const audioContext = new AudioContext();
-    try {
-      await audioContext.resume();
-      const decodedBuffer = await audioContext.decodeAudioData(
-        audioBuffer.slice(0)
-      );
-      return Math.floor(decodedBuffer.duration * 1000);
-    } finally {
-      await audioContext.close();
-    }
-  }
-
   async decodeToWavPcm16(
     audioBuffer: ArrayBuffer,
     targetSampleRate: number = 16000
   ): Promise<{ wavBuffer: ArrayBuffer; durationMs: number }> {
+    // Not resumed on purpose: decodeAudioData works on a suspended context, and
+    // resume() waits for a user gesture on iOS — where it does not reject, it
+    // stays pending, leaving the run stuck with nothing to show for it.
     const audioContext = new AudioContext();
     try {
-      await audioContext.resume();
       const decodedBuffer = await audioContext.decodeAudioData(
         audioBuffer.slice(0)
       );
