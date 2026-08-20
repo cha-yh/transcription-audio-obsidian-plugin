@@ -21,6 +21,7 @@ import {
 } from "../_base/utils/speechActivity";
 import { progressBus } from "../_base/utils/progressBus";
 import { toBlob } from "../_base/utils/blob";
+import { runWithConcurrency } from "../_base/utils/concurrency";
 import {
   hasChunkMarker,
   readChunkBody,
@@ -40,6 +41,12 @@ const CHUNK_TRANSCRIPTION_PROMPT =
   "Transcribe the following audio. Output only the transcript text for this part, without any extra commentary.";
 /** How long the classification/summarization steps wait for a manual retry. */
 const RETRY_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * How many chunks are transcribed at once. Unbounded parallelism started every
+ * upload in the same tick, which a phone cannot hold and which spends the
+ * Gemini rate limit in a burst — one quota error cancels the whole run.
+ */
+const MAX_CONCURRENT_CHUNKS = 4;
 function formatStamp(ms: number): string {
   const total = Math.floor(ms / 1000);
   const h = Math.floor(total / 3600);
@@ -693,12 +700,12 @@ export class TranscriptionController {
                 const { displayTotal, displayIndexOf } =
                   buildChunkDisplay(chunks);
 
-                // Launch all chunks in parallel; skipped ranges never reach
-                // the model and are already written into the temp file.
-                const chunkPromises = chunks
+                // Chunks run a few at a time; skipped ranges never reach the
+                // model and are already written into the temp file.
+                const chunkTasks = chunks
                   .map((c, ci) => ({ c, ci }))
                   .filter(({ c }) => !c.skipped)
-                  .map(({ c, ci }) =>
+                  .map(({ c, ci }) => () =>
                     this.processChunk({
                       ci,
                       chunk: c,
@@ -720,7 +727,10 @@ export class TranscriptionController {
                     })
                   );
 
-                const chunkSettled = await Promise.allSettled(chunkPromises);
+                const chunkSettled = await runWithConcurrency(
+                  chunkTasks,
+                  MAX_CONCURRENT_CHUNKS
+                );
                 throwIfCancelled();
 
                 // Check for quota errors — rethrow to cancel entire flow
@@ -1268,6 +1278,13 @@ export class TranscriptionController {
       retryable: true,
     };
     const failedPlaceholder = `${failedPrefix}${chunkIndex}${placeholderSuffix}`;
+
+    // Queued chunks can still be waiting when the run is cancelled. Without
+    // this they would announce themselves and cut their audio first, only to
+    // die on the upload.
+    if (abortSignal.aborted) {
+      throw new TranscriptionCancelledError();
+    }
 
     progressBus.publish({
       stage: "chunk-start",
