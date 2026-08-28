@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_SETTINGS,
   DEFAULT_CATEGORIES,
-  GENERAL_CATEGORY_ID,
   MODELS,
   MODEL_MIGRATIONS,
   DEFAULT_BASIC_MODE_PROMPT,
@@ -11,12 +10,11 @@ import {
   DEFAULT_CATEGORY_PROMPT_1ON1,
   DEFAULT_CATEGORY_PROMPT_TECH_MEETING,
   DEFAULT_CATEGORY_PROMPT_PROJECT,
-  DEFAULT_CATEGORY_PROMPT_GENERAL,
 } from "../setting";
 
 describe("DEFAULT_SETTINGS", () => {
   it("has all required fields", () => {
-    expect(DEFAULT_SETTINGS).toHaveProperty("mode");
+    expect(DEFAULT_SETTINGS).toHaveProperty("summarizeTranscript");
     expect(DEFAULT_SETTINGS).toHaveProperty("model");
     expect(DEFAULT_SETTINGS).toHaveProperty("secretApiKeyName");
     expect(DEFAULT_SETTINGS).toHaveProperty("enableTemplatePrompt");
@@ -35,7 +33,7 @@ describe("DEFAULT_SETTINGS", () => {
   });
 
   it("has valid default values", () => {
-    expect(DEFAULT_SETTINGS.mode).toBe("basic");
+    expect(DEFAULT_SETTINGS.summarizeTranscript).toBe(true);
     expect(DEFAULT_SETTINGS.enableTemplatePrompt).toBe(false);
     expect(DEFAULT_SETTINGS.enableCategoryClassification).toBe(false);
   });
@@ -46,16 +44,9 @@ describe("DEFAULT_SETTINGS", () => {
 });
 
 describe("DEFAULT_CATEGORIES", () => {
-  it("has 4 categories", () => {
-    expect(DEFAULT_CATEGORIES).toHaveLength(4);
-  });
-
-  it("includes General category", () => {
-    const general = DEFAULT_CATEGORIES.find(
-      (c) => c.id === GENERAL_CATEGORY_ID
-    );
-    expect(general).toBeDefined();
-    expect(general!.name).toBe("General");
+  it("has 3 categories and no General fallback category", () => {
+    expect(DEFAULT_CATEGORIES).toHaveLength(3);
+    expect(DEFAULT_CATEGORIES.some((c) => c.name === "General")).toBe(false);
   });
 
   it("all categories are enabled", () => {
@@ -75,12 +66,6 @@ describe("DEFAULT_CATEGORIES", () => {
       expect(cat.id).toBeTruthy();
       expect(cat.name).toBeTruthy();
     }
-  });
-});
-
-describe("GENERAL_CATEGORY_ID", () => {
-  it("is 'general'", () => {
-    expect(GENERAL_CATEGORY_ID).toBe("general");
   });
 });
 
@@ -125,6 +110,5 @@ describe("Prompt constants", () => {
     expect(DEFAULT_CATEGORY_PROMPT_1ON1.length).toBeGreaterThan(0);
     expect(DEFAULT_CATEGORY_PROMPT_TECH_MEETING.length).toBeGreaterThan(0);
     expect(DEFAULT_CATEGORY_PROMPT_PROJECT.length).toBeGreaterThan(0);
-    expect(DEFAULT_CATEGORY_PROMPT_GENERAL.length).toBeGreaterThan(0);
   });
 });

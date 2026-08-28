@@ -348,7 +348,7 @@ export class TranscriptionService {
       `Rules:\n` +
       `- Respond with ONLY the category name from the list above.\n` +
       `- Do not add any explanation, punctuation, or extra text.\n` +
-      `- If the transcript does not clearly fit any category, respond with "General".\n\n` +
+      `- If the transcript does not clearly fit any category, respond with "Default".\n\n` +
       `Transcript:\n${transcriptionText}`;
 
     if (!apiKey) {

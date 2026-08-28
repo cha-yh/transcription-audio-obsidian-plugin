@@ -33,7 +33,6 @@ import { AudioService, WavHeader } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
 import {
   DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
-  GENERAL_CATEGORY_ID,
 } from "_base/constants/setting";
 import { TranscriptionCategory } from "_base/types/setting";
 
@@ -1046,15 +1045,12 @@ export class TranscriptionController {
         detectedCategory = matched.name;
         await this.updateTempFileCategory(filePath, detectedCategory);
       } else {
-        const generalCategory = categories.find(
-          (c) => c.id === GENERAL_CATEGORY_ID
-        );
-        detectedCategory = generalCategory
-          ? generalCategory.name
-          : categories[categories.length - 1].name;
+        // An unrecognized category intentionally falls back to the user's
+        // default prompt instead of a synthetic "General" category.
+        detectedCategory = "";
         await this.updateTempFileCategory(
           filePath,
-          `${detectedCategory} (AI suggested: ${aiCategory})`
+          `Default prompt (AI suggested: ${aiCategory})`
         );
       }
 

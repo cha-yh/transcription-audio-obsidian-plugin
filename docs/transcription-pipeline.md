@@ -4,9 +4,8 @@
 
 - User invokes the "Transcribe audio" command while the cursor is in a Markdown note
 - Plugin resolves the API key from the selected API key entry
-- The processing mode selects Prompt only, Transcription, or Transcription only behavior
-- Prompt only mode can optionally use a template prompt and output template
-- `TranscriptionController.run()` is called with the editor context, resolved API key, prompt, model, output template, and mode-derived feature flags
+- A transcript is always generated; the summary setting controls whether it is summarized afterwards
+- `TranscriptionController.run()` is called with the editor context, resolved API key, default prompt, model, and summary/classification feature flags
 
 ## Pre-flight Validation
 
@@ -23,9 +22,9 @@
 - The MIME type is resolved from the file extension (mp3, mp4, m4a, wav, webm, etc.)
 - The buffer is inspected to determine if it is a PCM 16-bit WAV file (checks RIFF/WAVE header and fmt chunk)
 
-## Transcription — Branch by Processing Mode
+## Transcription
 
-### Path A: PCM16 WAV Chunking (PCM16 WAV file without output template)
+### Path A: PCM16 WAV Chunking
 
 - The WAV header is parsed to extract sample rate, channels, bit depth, and data size
 - `computeWavChunkRanges()` divides the audio into byte-sized chunks (targeting 10 MB each, clamped to 2–8 minutes, with 1.5 s overlap)
@@ -36,7 +35,7 @@
 - Chunk results are concatenated with part markers; failed chunks embed an inline error placeholder
 - The combined text becomes the final transcript
 
-### Path B: Transcription Mode
+### Path B: Transcript generation and optional summarization
 
 - **Existing transcript check**: Looks for a previously saved `_transcription_*.md` file for the same audio; if found, the transcription step is skipped entirely
 - **Audio preparation**: If the file is not already PCM16 WAV, it is decoded via `AudioContext` and re-encoded to 16 kHz mono PCM16 WAV. This is the only step that depends on a browser audio API, and the only one whose behaviour can differ between desktop and a mobile WebView
@@ -50,24 +49,18 @@
   - After all chunks settle, quota errors are surfaced immediately; cancellation aborts the entire flow
 - **Classification step** (if category classification is enabled):
   - The raw transcript is sent to the Gemini model with a list of enabled category names
-  - The model returns a single category name; if unrecognized, it falls back to General
+  - The model returns a single category name; if unrecognized, the default prompt is used
   - The detected category is written into the transcription file's YAML frontmatter
   - On failure, the step pauses and waits for a retry event from the progress bus
 - **Prompt selection without classification**:
-  - The same Prompt/Template prompt settings used by Prompt only mode are used for all transcripts
+  - The configured default prompt is used for all transcripts
 - **Summarization step**:
   - The prompt for the matched category, or the configured prompt when classification is disabled, is selected
   - The raw transcript is sent to the Gemini model with the category-specific prompt
   - On failure, the step pauses and waits for a retry event from the progress bus
   - The summarized text becomes the final transcript
-- **Transcription only mode**:
+- **Summary disabled**:
   - The raw transcript file is finalized and linked without running classification or summarization
-
-### Path C: Prompt Only Mode
-
-- The audio buffer is base64-encoded and uploaded via the resumable upload API
-- A single Gemini request is made with the user's prompt (or template-augmented prompt if an output template is set)
-- The response text becomes the final transcript
 
 ## File Upload (shared across all paths)
 

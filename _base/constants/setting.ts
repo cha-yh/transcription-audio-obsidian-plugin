@@ -139,10 +139,6 @@ export const DEFAULT_CATEGORY_PROMPT_PROJECT =
   "- [ ] Owner — action — due date" +
   CATEGORY_PROMPT_BASE;
 
-export const DEFAULT_CATEGORY_PROMPT_GENERAL = DEFAULT_BASIC_MODE_PROMPT;
-
-export const GENERAL_CATEGORY_ID = "general";
-
 export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
   {
     id: "1on1",
@@ -162,16 +158,10 @@ export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
     prompt: DEFAULT_CATEGORY_PROMPT_PROJECT,
     enabled: true,
   },
-  {
-    id: GENERAL_CATEGORY_ID,
-    name: "General",
-    prompt: DEFAULT_CATEGORY_PROMPT_GENERAL,
-    enabled: true,
-  },
 ];
 
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
-  mode: "basic",
+  summarizeTranscript: true,
   model: "gemini-3.7-flash",
   secretApiKeyName: "",
   enableTemplatePrompt: false,
