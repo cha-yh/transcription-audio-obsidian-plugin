@@ -1,8 +1,3 @@
-export type TranscriptionInputMode =
-  | "basic"
-  | "transcription"
-  | "transcription-only";
-
 export interface TranscriptionCategory {
   id: string;
   name: string;
@@ -11,13 +6,11 @@ export interface TranscriptionCategory {
 }
 
 export interface AudioPluginSettings {
-  mode: TranscriptionInputMode;
+  /** Whether to generate a summary after the always-on transcription step. */
+  summarizeTranscript: boolean;
   model: string;
   secretApiKeyName: string;
   prompt: string;
-  enableTemplatePrompt: boolean;
-  templatePrompt: string;
-  outputTemplate: string;
   enableCategoryClassification: boolean;
   categories: TranscriptionCategory[];
 }
