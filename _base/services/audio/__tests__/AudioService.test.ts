@@ -1,41 +1,60 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { AudioService } from "../AudioService";
 import {
   createTestWavBuffer,
   createNonPcm16WavBuffer,
 } from "../../../../tests/helpers/createTestWavBuffer";
 
-// Polyfill window.btoa for Node environment
-beforeAll(() => {
-  if (typeof globalThis.window === "undefined") {
-    (globalThis as any).window = {};
-  }
-  if (typeof globalThis.window.btoa === "undefined") {
-    (globalThis as any).window.btoa = (str: string) =>
-      Buffer.from(str, "binary").toString("base64");
-  }
-});
-
 const audio = new AudioService();
 
-describe("arrayBufferToBase64", () => {
-  it("encodes known bytes correctly", () => {
-    const buf = new Uint8Array([72, 101, 108, 108, 111]).buffer; // "Hello"
-    expect(audio.arrayBufferToBase64(buf)).toBe(
-      Buffer.from("Hello").toString("base64")
+describe("sliceWavPcm16ToBlob", () => {
+  it("produces the same bytes as the copying slice", async () => {
+    const buf = createTestWavBuffer(1000, 16000, 1);
+    const header = audio.parseWavHeader(buf);
+
+    const copied = audio.sliceWavPcm16(buf, 200, 700);
+    const referenced = audio.sliceWavPcm16ToBlob(
+      new Blob([buf]),
+      header,
+      200,
+      700
+    );
+
+    expect(referenced.size).toBe(copied.byteLength);
+    expect(new Uint8Array(await referenced.arrayBuffer())).toEqual(
+      new Uint8Array(copied)
     );
   });
 
-  it("encodes empty buffer", () => {
-    const buf = new ArrayBuffer(0);
-    expect(audio.arrayBufferToBase64(buf)).toBe("");
+  it("writes a header the parser accepts", async () => {
+    const buf = createTestWavBuffer(2000, 16000, 1);
+    const header = audio.parseWavHeader(buf);
+
+    const blob = audio.sliceWavPcm16ToBlob(new Blob([buf]), header, 0, 500);
+    const sliced = audio.parseWavHeader(await blob.arrayBuffer());
+
+    expect(sliced.audioFormat).toBe(1);
+    expect(sliced.sampleRate).toBe(16000);
+    expect(sliced.numChannels).toBe(1);
+    expect(sliced.bitsPerSample).toBe(16);
+    expect(sliced.dataSize).toBe(500 * 16000 * 2 / 1000);
   });
 
-  it("round-trips binary data", () => {
-    const bytes = new Uint8Array([0, 1, 127, 128, 255]);
-    const b64 = audio.arrayBufferToBase64(bytes.buffer);
-    const decoded = Buffer.from(b64, "base64");
-    expect(new Uint8Array(decoded)).toEqual(bytes);
+  it("clamps a range that runs past the end", async () => {
+    const buf = createTestWavBuffer(500, 16000, 1);
+    const header = audio.parseWavHeader(buf);
+
+    const blob = audio.sliceWavPcm16ToBlob(new Blob([buf]), header, 0, 99999);
+    expect(blob.size).toBe(buf.byteLength);
+  });
+
+  it("rejects non-PCM16 input", () => {
+    const buf = createNonPcm16WavBuffer(500);
+    const header = audio.parseWavHeader(buf);
+
+    expect(() =>
+      audio.sliceWavPcm16ToBlob(new Blob([buf]), header, 0, 100)
+    ).toThrow("Only PCM 16-bit WAV is supported");
   });
 });
 

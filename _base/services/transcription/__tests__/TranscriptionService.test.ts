@@ -23,8 +23,21 @@ vi.mock("@google/genai", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
+/** Bytes to upload, in the shape transcribe() now takes. */
+function audioSource(bytes = new Uint8Array([1, 2, 3])) {
+  return {
+    kind: "upload" as const,
+    blob: new Blob([bytes], { type: "audio/wav" }),
+    mimeType: "audio/wav",
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps queued mockResolvedValueOnce implementations, so a test
+  // that leaves part of its upload queue unused would feed the next one.
+  mockFetch.mockReset();
+  mockGenerateContent.mockReset();
 });
 
 describe("TranscriptionCancelledError", () => {
@@ -84,25 +97,45 @@ describe("isTranscriptionQuotaError", () => {
 });
 
 // Helper to set up fetch mocks for file upload
-function mockFileUpload() {
-  mockFetch
-    .mockResolvedValueOnce({
+/**
+ * Queues the fetch responses for one resumable upload.
+ *
+ * `chunks` is how many 8 MB parts the blob is expected to take: every part but
+ * the last answers "active", the last one answers "final" with the file payload.
+ * `exposeUploadUrl: false` drops the x-goog-upload-url response header, which is
+ * what a CORS setup that does not expose it looks like from inside a WebView.
+ */
+function mockFileUpload({
+  chunks = 1,
+  exposeUploadUrl = true,
+}: { chunks?: number; exposeUploadUrl?: boolean } = {}) {
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    headers: new Headers(
+      exposeUploadUrl
+        ? { "x-goog-upload-url": "https://upload.example.com/resume" }
+        : {}
+    ),
+  });
+
+  for (let i = 0; i < chunks - 1; i++) {
+    mockFetch.mockResolvedValueOnce({
       ok: true,
-      headers: new Headers({
-        "x-goog-upload-url": "https://upload.example.com/resume",
-      }),
-    })
-    .mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ "x-goog-upload-status": "final" }),
-      json: async () => ({
-        file: {
-          uri: "gs://bucket/file",
-          mimeType: "audio/wav",
-          expirationTime: "2099-01-01T00:00:00Z",
-        },
-      }),
+      headers: new Headers({ "x-goog-upload-status": "active" }),
     });
+  }
+
+  mockFetch.mockResolvedValueOnce({
+    ok: true,
+    headers: new Headers({ "x-goog-upload-status": "final" }),
+    json: async () => ({
+      file: {
+        uri: "gs://bucket/file",
+        mimeType: "audio/wav",
+        expirationTime: "2099-01-01T00:00:00Z",
+      },
+    }),
+  });
 }
 
 describe("TranscriptionService", () => {
@@ -121,8 +154,7 @@ describe("TranscriptionService", () => {
       const result = await service.transcribe(
         apiKey,
         "prompt",
-        btoa("audio"),
-        "audio/wav",
+        audioSource(),
         model,
         60000
       );
@@ -131,6 +163,34 @@ describe("TranscriptionService", () => {
       expect(result.usage.promptTokenCount).toBe(10);
       expect(result.uploadedFile).toBeDefined();
       expect(result.uploadedFile!.uri).toBe("gs://bucket/file");
+    });
+
+    // Regression test for issue #3: the upload path used Buffer.from() to turn
+    // base64 back into bytes, which threw "Buffer is not defined" on Android.
+    // Removing the global only around the call keeps vitest's own Buffer use
+    // (error serialisation) intact.
+    it("uploads without Node's Buffer, as the mobile WebView has none", async () => {
+      mockFileUpload();
+      mockGenerateContent.mockResolvedValueOnce({
+        text: "mobile ok",
+        usageMetadata: { totalTokenCount: 3 },
+      });
+
+      const nodeBuffer = globalThis.Buffer;
+      // @ts-expect-error deleting a Node global to emulate the mobile runtime
+      delete globalThis.Buffer;
+      try {
+        const result = await service.transcribe(
+          apiKey,
+          "prompt",
+          audioSource(),
+          model,
+          60000
+        );
+        expect(result.text).toBe("mobile ok");
+      } finally {
+        globalThis.Buffer = nodeBuffer;
+      }
     });
 
     it("skips upload when cachedFile is provided", async () => {
@@ -148,17 +208,9 @@ describe("TranscriptionService", () => {
       const result = await service.transcribe(
         apiKey,
         "prompt",
-        btoa("audio"),
-        "audio/wav",
+        { kind: "cached", file: cachedFile },
         model,
-        60000,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        cachedFile
+        60000
       );
 
       expect(result.text).toBe("cached result");
@@ -175,8 +227,7 @@ describe("TranscriptionService", () => {
       await service.transcribe(
         apiKey,
         "prompt",
-        btoa("audio"),
-        "audio/wav",
+        audioSource(),
         model,
         60000,
         undefined,
@@ -204,8 +255,7 @@ describe("TranscriptionService", () => {
         service.transcribe(
           apiKey,
           "prompt",
-          btoa("audio"),
-          "audio/wav",
+          audioSource(),
           model,
           60000,
           undefined,
@@ -227,8 +277,7 @@ describe("TranscriptionService", () => {
         service.transcribe(
           apiKey,
           "prompt",
-          btoa("audio"),
-          "audio/wav",
+          audioSource(),
           model,
           60000
         )
@@ -245,8 +294,7 @@ describe("TranscriptionService", () => {
         service.transcribe(
           apiKey,
           "prompt",
-          btoa("audio"),
-          "audio/wav",
+          audioSource(),
           model,
           60000
         )
@@ -261,8 +309,7 @@ describe("TranscriptionService", () => {
         service.transcribe(
           apiKey,
           "prompt",
-          btoa("audio"),
-          "audio/wav",
+          audioSource(),
           model,
           60000
         )
@@ -274,12 +321,80 @@ describe("TranscriptionService", () => {
         service.transcribe(
           "",
           "prompt",
-          btoa("audio"),
-          "audio/wav",
+          audioSource(),
           model,
           60000
         )
       ).rejects.toThrow("API Key is not provided");
+    });
+
+    it("splits a blob larger than the chunk size across sequential uploads", async () => {
+      // 20 MB spans three 8 MB parts, so the while loop runs more than once —
+      // the single-part happy path never exercised it.
+      const blob = new Blob([new Uint8Array(20 * 1024 * 1024)], {
+        type: "audio/wav",
+      });
+      mockFileUpload({ chunks: 3 });
+      mockGenerateContent.mockResolvedValueOnce({
+        text: "long",
+        usageMetadata: {},
+      });
+
+      await service.transcribe(
+        apiKey,
+        "prompt",
+        { kind: "upload", blob, mimeType: "audio/wav" },
+        model,
+        60000
+      );
+
+      // one start request plus one per part
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+
+      const uploadCalls = mockFetch.mock.calls.slice(1);
+      expect(
+        uploadCalls.map((call) => call[1].headers["X-Goog-Upload-Offset"])
+      ).toEqual(["0", "8388608", "16777216"]);
+      expect(
+        uploadCalls.map((call) => call[1].headers["X-Goog-Upload-Command"])
+      ).toEqual(["upload", "upload", "upload, finalize"]);
+    });
+
+    it("fails clearly when the upload URL header is not readable", async () => {
+      // A WebView that cannot see x-goog-upload-url (not exposed by CORS) ends
+      // up here rather than somewhere further down the upload.
+      mockFileUpload({ exposeUploadUrl: false });
+
+      await expect(
+        service.transcribe(apiKey, "prompt", audioSource(), model, 60000)
+      ).rejects.toThrow("upload URL not found");
+    });
+
+    it("reports a chunk that is not acknowledged as active", async () => {
+      const blob = new Blob([new Uint8Array(12 * 1024 * 1024)], {
+        type: "audio/wav",
+      });
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Headers({
+            "x-goog-upload-url": "https://upload.example.com/resume",
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: new Headers({}),
+        });
+
+      await expect(
+        service.transcribe(
+          apiKey,
+          "prompt",
+          { kind: "upload", blob, mimeType: "audio/wav" },
+          model,
+          60000
+        )
+      ).rejects.toThrow("unexpected upload status");
     });
   });
 

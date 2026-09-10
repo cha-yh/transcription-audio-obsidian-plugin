@@ -1,6 +1,12 @@
 .transcription-audio-setting-text-area {
-  width: 350px;
+  /* Fills the settings row rather than a fixed 350px, which overflowed
+     sideways on a phone. Matches .transcription-audio-modal-textarea below. */
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 12rem;
   height: 400px;
+  max-height: 60vh;
+  resize: vertical;
 }
 
 .setting-item-control.transcription-audio-setting-with-reset {
