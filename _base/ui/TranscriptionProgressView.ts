@@ -953,6 +953,16 @@ export class TranscriptionProgressView extends ItemView {
         this.pushLog("Preparing audio", "Preparing audio", this.currentSession);
         break;
       }
+      case "audio-decode-unavailable": {
+        if (!this.currentSession) {
+          break;
+        }
+        // Not an error: the run continues with the original file. Saying so
+        // matters because the transcript will not be split into chunks.
+        const msg = `Cannot decode this audio here (${e.message}) — sending the original file in one request, without splitting`;
+        this.pushLog(msg, msg, this.currentSession);
+        break;
+      }
       case "speech-activity": {
         if (!this.currentSession) {
           break;

@@ -3,6 +3,7 @@ export type ProgressStage =
   | "file-detected"
   | "file-size"
   | "preparing-audio"
+  | "audio-decode-unavailable"
   | "speech-activity"
   | "target-file-selected"
   | "chunk-start"
@@ -74,6 +75,12 @@ export type ProgressEvent =
       }[];
     }
   | { stage: "target-file-selected"; path: string; line: number; ch: number }
+  /**
+   * The audio could not be decoded on this platform, so its duration is unknown
+   * and it cannot be split. The original file is uploaded whole instead —
+   * transcription still works, since decoding only ever served chunking.
+   */
+  | { stage: "audio-decode-unavailable"; message: string }
   | ({
       stage: "chunk-start";
       chunkIndex: number;
