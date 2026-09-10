@@ -18,6 +18,19 @@ import {
   TranscriptionInputMode,
 } from "_base/types/setting";
 import {
+  MAX_HISTORY_LIMIT,
+  MIN_HISTORY_LIMIT,
+  SESSION_HISTORY_FILE,
+} from "_base/constants/sessionHistory";
+import {
+  clampHistoryLimit,
+  resolveHistoryLimit,
+} from "_base/utils/sessionSnapshot";
+import {
+  ProgressHistoryStore,
+  type SessionHistoryPort,
+} from "_base/services/session/ProgressHistoryStore";
+import {
   DEFAULT_SETTINGS,
   MODELS,
   MODEL_MIGRATIONS,
@@ -85,11 +98,21 @@ export default class TranscriptionAudioPlugin extends Plugin {
 
   private transcriptionController: TranscriptionController;
   private progressViewType: string;
+  private historyStore: ProgressHistoryStore;
 
   async onload() {
     await this.loadSettings();
 
     this.progressViewType = getProgressViewType(this.manifest.id);
+
+    this.historyStore = new ProgressHistoryStore(this.createHistoryPort(), {
+      enabled: this.settings.enableSessionHistory,
+      limit: resolveHistoryLimit(this.settings),
+    });
+    // Read once per load, before any view can open: this is also where a run
+    // that was still going when the plugin last unloaded gets marked as
+    // interrupted, which reopening the sidebar must not redo.
+    await this.historyStore.hydrate();
 
     this.transcriptionController = new TranscriptionController(
       this.app,
@@ -98,7 +121,13 @@ export default class TranscriptionAudioPlugin extends Plugin {
 
     this.registerView(
       this.progressViewType,
-      (leaf) => new TranscriptionProgressView(leaf, this.progressViewType)
+      (leaf) =>
+        new TranscriptionProgressView(
+          leaf,
+          this.progressViewType,
+          this.historyStore,
+          () => this.settings
+        )
     );
 
     this.addCommand({
@@ -106,6 +135,16 @@ export default class TranscriptionAudioPlugin extends Plugin {
       name: "Transcribe audio",
       editorCallback: (editor: Editor, view: MarkdownView) => {
         this.commandGenerateTranscript(editor);
+      },
+    });
+
+    this.addCommand({
+      id: "open-progress-panel",
+      name: "Open progress panel",
+      callback: () => {
+        // The view restores whatever the store holds as it opens, so this is
+        // also how a user gets their saved run history back on screen.
+        void this.transcriptionController.openProgressView();
       },
     });
 
@@ -117,6 +156,63 @@ export default class TranscriptionAudioPlugin extends Plugin {
     // itself, and detaching during unload both double-removes DOM nodes and
     // discards the user's sidebar placement.
     this.transcriptionController.dispose();
+    // Best-effort: Obsidian does not await onunload, which is why finishing a
+    // run writes immediately rather than relying on this.
+    this.historyStore.dispose();
+  }
+
+  /**
+   * File access for the history store, kept out of the store itself so its
+   * tests need no Obsidian mock.
+   */
+  private createHistoryPort(): SessionHistoryPort {
+    const adapter = this.app.vault.adapter;
+    const dir =
+      this.manifest.dir ??
+      `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+    const path = `${dir}/${SESSION_HISTORY_FILE}`;
+
+    return {
+      read: async () => ((await adapter.exists(path)) ? adapter.read(path) : null),
+      write: (data) => adapter.write(path, data),
+      backup: async (version) => {
+        const backupPath = `${dir}/${SESSION_HISTORY_FILE.replace(
+          /\.json$/,
+          ""
+        )}.v${version}.bak.json`;
+        if (await adapter.exists(backupPath)) {
+          await adapter.remove(backupPath);
+        }
+        await adapter.rename(path, backupPath);
+      },
+    };
+  }
+
+  /** Re-applies the history settings to the store and any open panel. */
+  async applyHistorySettings(): Promise<void> {
+    const wasEnabled = this.historyStore.isEnabled();
+    this.historyStore.setOptions({
+      enabled: this.settings.enableSessionHistory,
+      limit: resolveHistoryLimit(this.settings),
+    });
+
+    // Switching history back on: the file was left untouched while it was
+    // off, so read it back before anything writes over it.
+    const restored = !wasEnabled && this.settings.enableSessionHistory;
+    if (restored) {
+      await this.historyStore.hydrate();
+    }
+
+    for (const leaf of this.app.workspace.getLeavesOfType(
+      this.progressViewType
+    )) {
+      const view = leaf.view;
+      if (!(view instanceof TranscriptionProgressView)) continue;
+      if (restored) {
+        view.mergeRestored(this.historyStore.list());
+      }
+      view.applyHistorySettings();
+    }
   }
 
   async loadSettings() {
@@ -182,6 +278,14 @@ export default class TranscriptionAudioPlugin extends Plugin {
     }
 
     if (this.settings.model !== previousModel) {
+      shouldSaveSettings = true;
+    }
+
+    // A limit stored as 0, negative or NaN would silently disable retention.
+    const storedLimit = clampHistoryLimit(this.settings.sessionHistoryLimit);
+    if (storedLimit !== this.settings.sessionHistoryLimit) {
+      this.settings.sessionHistoryLimit =
+        storedLimit ?? DEFAULT_SETTINGS.sessionHistoryLimit;
       shouldSaveSettings = true;
     }
 
@@ -540,6 +644,84 @@ class TranscriptionSettingTab extends PluginSettingTab {
     }
   }
 
+  private displayHistorySettings(containerEl: HTMLElement): void {
+    const settings = this.plugin.settings;
+
+    new Setting(containerEl)
+      .setName("Keep run history")
+      .setDesc(
+        "Keeps the progress panel's records across plugin reloads and updates. Turning this off stops new records being saved; records already on disk are left alone."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(settings.enableSessionHistory)
+          .onChange(async (value) => {
+            settings.enableSessionHistory = value;
+            await this.plugin.saveSettings();
+            await this.plugin.applyHistorySettings();
+            this.display();
+          });
+      });
+
+    if (!settings.enableSessionHistory) {
+      return;
+    }
+
+    new Setting(containerEl)
+      .setName("Auto-remove old records")
+      .setDesc("Drops the oldest records once the panel passes the limit.")
+      .addToggle((toggle) => {
+        toggle
+          .setValue(settings.autoPruneSessionHistory)
+          .onChange(async (value) => {
+            settings.autoPruneSessionHistory = value;
+            await this.plugin.saveSettings();
+            await this.plugin.applyHistorySettings();
+            this.display();
+          });
+      });
+
+    if (!settings.autoPruneSessionHistory) {
+      return;
+    }
+
+    new Setting(containerEl)
+      .setName("Records to keep")
+      .setDesc(
+        `How many runs stay in the panel. ${MIN_HISTORY_LIMIT}-${MAX_HISTORY_LIMIT}. A run in progress is always kept.`
+      )
+      .addText((text) => {
+        text.inputEl.type = "number";
+        text.inputEl.min = String(MIN_HISTORY_LIMIT);
+        text.inputEl.max = String(MAX_HISTORY_LIMIT);
+        text
+          .setValue(String(settings.sessionHistoryLimit))
+          .onChange(async (value) => {
+            const limit = clampHistoryLimit(value);
+            if (limit === undefined) {
+              // Mid-typing: an empty field is not a number to save yet.
+              return;
+            }
+            settings.sessionHistoryLimit = limit;
+            await this.plugin.saveSettings();
+            await this.plugin.applyHistorySettings();
+            // Deliberately no this.display() here - re-rendering the tab would
+            // steal focus after every keystroke.
+          });
+
+        // What is stored is already clamped, so an out-of-range number left on
+        // screen only misreports what was saved. Snapping it on the way out
+        // rather than on every keystroke keeps "150" typeable: correcting the
+        // leading "1" immediately would fight the person typing it.
+        const snapToStoredValue = () => {
+          text.setValue(String(settings.sessionHistoryLimit));
+        };
+        // blur covers clicking away, change covers pressing Enter.
+        text.inputEl.addEventListener("blur", snapToStoredValue);
+        text.inputEl.addEventListener("change", snapToStoredValue);
+      });
+  }
+
   display(): void {
     let { containerEl } = this;
     containerEl.empty();
@@ -633,6 +815,8 @@ class TranscriptionSettingTab extends PluginSettingTab {
         this.displayPromptOnlySettings(containerEl);
       }
     }
+
+    this.displayHistorySettings(containerEl);
   }
 }
 

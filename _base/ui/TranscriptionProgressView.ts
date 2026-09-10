@@ -5,43 +5,59 @@ import type { ProgressEvent } from "../types/progress";
 import {
   formatBytes,
   formatDuration,
+  formatLocaleDateTime,
   formatTimeRange,
   formatTimestamp,
 } from "../utils/format";
+import type {
+  SessionStatus,
+  PersistedSession,
+  PersistedSparkline,
+  PersistedSparklineChunk,
+} from "../types/sessionHistory";
+import {
+  createInitialSession,
+  fromSnapshot,
+  isRemovableStatus,
+  resolveHistoryLimit,
+  toSnapshot,
+  type RuntimeLogEntry,
+  type SessionRuntimeState,
+} from "../utils/sessionSnapshot";
+import { TERMINAL_STAGES } from "../constants/sessionHistory";
+import type { ProgressHistoryStore } from "../services/session/ProgressHistoryStore";
+import type { AudioPluginSettings } from "../types/setting";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Anything that is not a clean success reads as an error icon. */
+function indicatorStatusOf(
+  status: SessionStatus
+): "success" | "loading" | "error" {
+  if (status === "success") return "success";
+  if (status === "running") return "loading";
+  return "error";
+}
 /** Above this many chunks the number labels collide, so they are dropped. */
 const MAX_SPARKLINE_LABELS = 8;
 
-interface SparklineChunk {
-  chunkIndex: number;
-  startMs: number;
-  endMs: number;
-  speechRatio: number;
-  skipped: boolean;
-}
+type SparklineChunk = PersistedSparklineChunk;
+type SparklineData = PersistedSparkline;
 
-interface SparklineData {
-  /** Speech-frame ratio per bucket, 0..1. */
-  buckets: number[];
-  totalMs: number;
-  chunks: SparklineChunk[];
-}
-
-interface LogEntry {
-  text: string;
-  /** Set when this line represents a chunk result that can be re-run. */
-  retryChunkIndex?: number;
-  /** A newer result for the same chunk arrived; this button is dead. */
-  retryStale?: boolean;
-  retryRunning?: boolean;
+interface LogEntry extends RuntimeLogEntry {
   retryButtonEl?: HTMLButtonElement;
-  /** Rendered as a bar chart instead of plain text. */
-  sparkline?: SparklineData;
 }
 
-interface TranscriptionSession {
+/**
+ * The DOM half of a session. Kept apart from the state half so that what gets
+ * written to disk is visible in the type: anything here is a node, anything in
+ * SessionRuntimeState is a value that survives a reload.
+ */
+interface SessionRefs {
   sessionEl: HTMLElement;
+  headerEl: HTMLElement;
+  dateEl: HTMLElement;
+  closeButtonEl: HTMLButtonElement;
   fileNameEl: HTMLAnchorElement;
   fileSizeEl: HTMLElement;
   statusEl: HTMLElement;
@@ -51,7 +67,6 @@ interface TranscriptionSession {
   categoryEl: HTMLElement;
   transcriptRowEl: HTMLElement;
   transcriptFileEl: HTMLAnchorElement;
-  transcriptPath?: string;
   chunkWrapEl?: HTMLElement;
   chunkBarEl?: HTMLProgressElement;
   chunkLabelEl?: HTMLElement;
@@ -61,40 +76,27 @@ interface TranscriptionSession {
   cancelButtonEl: HTMLButtonElement;
   logHistoryEl: HTMLElement;
   indicatorEl: HTMLElement;
-  logHistory: LogEntry[];
-  pendingRetryChunks: Set<number>;
-  /** Chunks that failed, so a successful re-run can advance the progress bar. */
-  failedChunks: Set<number>;
-  isLogExpanded: boolean;
-  isCancellable: boolean;
-  audioPath?: string;
-  targetPath?: string;
-  targetLine?: number;
-  targetCh?: number;
-  startedAtMs: number;
-  chunkTotal: number;
-  chunkIndex: number;
-  chunksCompleted: number;
 }
+
+/**
+ * Flat on purpose: `session.statusEl` and `session.logHistory` are read in
+ * well over a hundred places, and nesting the state would rename every one of
+ * them for no behavioural gain.
+ */
+type TranscriptionSession = SessionRefs &
+  Omit<SessionRuntimeState, "logHistory"> & { logHistory: LogEntry[] };
 
 export class TranscriptionProgressView extends ItemView {
   private wrapperEl!: HTMLElement;
   private sessionsContainerEl!: HTMLElement;
   private currentSession?: TranscriptionSession;
+  /** Newest first; [0] is the current session while a run is going. */
+  private sessions: TranscriptionSession[] = [];
+  /** Disambiguates two runs that start in the same millisecond. */
+  private sessionSeq = 0;
   private pendingEvents: ProgressEvent[] = [];
   /** Keeps SVG pattern ids unique across sessions in the same document. */
   private sparklineSeq = 0;
-
-  private formatLocaleDateTime(date: Date): string {
-    try {
-      return new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "medium",
-      }).format(date);
-    } catch {
-      return date.toLocaleString();
-    }
-  }
 
   private async openTargetFile(session: TranscriptionSession): Promise<void> {
     if (!session.targetPath) {
@@ -178,7 +180,13 @@ export class TranscriptionProgressView extends ItemView {
     this.app.workspace.revealLeaf(leaf);
   }
 
-  constructor(leaf: WorkspaceLeaf, private readonly viewType: string) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    private readonly viewType: string,
+    private readonly store: ProgressHistoryStore,
+    /** A getter, not a value: the toggles change while the view is open. */
+    private readonly getSettings: () => AudioPluginSettings
+  ) {
     super(leaf);
   }
 
@@ -215,7 +223,39 @@ export class TranscriptionProgressView extends ItemView {
       cls: "transcription-audio-sessions",
     });
 
+    // Subscribed before restoring: the controller opens this view as it starts
+    // a run, so a later subscription would miss that run's file-detected.
     this.register(progressBus.subscribe((e) => this.onProgress(e)));
+    this.register(() => {
+      void this.store.flush();
+      this.store.clearSource();
+    });
+    this.store.setSource(() => this.sessions.map(toSnapshot));
+
+    this.restoreSessions();
+  }
+
+  /**
+   * Draws what the store already holds in memory. The file itself is read once
+   * per plugin load, not here — reopening the sidebar mid-run must keep the
+   * live session rather than replace it with a stale copy of itself.
+   */
+  private restoreSessions(): void {
+    this.sessions = [];
+    this.currentSession = undefined;
+
+    for (const snapshot of this.store.list()) {
+      const session = this.renderSession(fromSnapshot(snapshot));
+      this.sessionsContainerEl.appendChild(session.sessionEl);
+      this.sessions.push(session);
+    }
+
+    // A session still marked running means the plugin never unloaded, so the
+    // run it belongs to is still going and its events should keep landing.
+    const newest = this.sessions[0];
+    if (newest && newest.status === "running") {
+      this.currentSession = newest;
+    }
   }
 
   /**
@@ -295,7 +335,7 @@ export class TranscriptionProgressView extends ItemView {
     session.logHistory.push(entry);
 
     // Update status bar with summary (short message for quick glance)
-    session.latestLogEl.setText(summaryText);
+    this.setLatestLog(session, summaryText);
 
     // Add to log detail area if expanded
     if (session.isLogExpanded) {
@@ -566,57 +606,58 @@ export class TranscriptionProgressView extends ItemView {
     this.refreshRetryButtons(session);
   }
 
-  private createNewSession(): TranscriptionSession {
-    const startedAtMs = Date.now();
-    const startText = `Log start: ${this.formatLocaleDateTime(
-      new Date(startedAtMs)
-    )}`;
+  /**
+   * Builds one session's DOM from its state. A fresh run and a record restored
+   * from disk both come through here, so anything filled in only on the live
+   * path is something that will not survive a reload.
+   */
+  private renderSession(state: SessionRuntimeState): TranscriptionSession {
+    const sessionEl = document.createElement("div");
+    sessionEl.className = "transcription-audio-session";
 
-    // Create new session container (always add to the top)
-    const newSessionEl = document.createElement("div");
-    newSessionEl.className = "transcription-audio-session";
+    const headerEl = sessionEl.createEl("div", {
+      cls: "transcription-audio-session-header",
+    });
+    const dateEl = headerEl.createEl("span", {
+      text: formatLocaleDateTime(new Date(state.startedAtMs)),
+      cls: "transcription-audio-session-date",
+    });
+    const closeButtonEl = headerEl.createEl("button", {
+      text: "\u00d7",
+      cls: "transcription-audio-session-close-button",
+      attr: { "aria-label": "Remove this record", title: "Remove this record" },
+    });
+    // A run still going keeps its cancel button instead. Removing the card
+    // would take away the only way to stop the work it is still doing.
+    closeButtonEl.hidden = !isRemovableStatus(state.status);
 
-    // Insert before existing session if exists, otherwise append
-    if (this.currentSession) {
-      // The controller keeps retry context for the most recent run only, so
-      // buttons from the previous session would target the wrong file.
-      for (const entry of this.currentSession.logHistory) {
-        if (entry.retryChunkIndex !== undefined) {
-          entry.retryStale = true;
-        }
-      }
-      this.refreshRetryButtons(this.currentSession);
-
-      this.sessionsContainerEl.insertBefore(
-        newSessionEl,
-        this.currentSession.sessionEl
-      );
-    } else {
-      this.sessionsContainerEl.appendChild(newSessionEl);
-    }
-
-    // Create info area
-    const infoEl = newSessionEl.createEl("div", {
+    const infoEl = sessionEl.createEl("div", {
       cls: "transcription-audio-info",
     });
+
     const row1 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row1.createEl("span", { text: "File: ", cls: "transcription-audio-label" });
     const fileNameEl = row1.createEl("a", {
-      text: "-",
-      cls: "internal-link transcription-audio-file-link is-disabled",
+      text: state.audioName ?? "-",
+      cls: "internal-link transcription-audio-file-link",
     });
     fileNameEl.href = "#";
+    if (state.audioPath) {
+      fileNameEl.title = state.audioPath;
+    } else {
+      fileNameEl.classList.add("is-disabled");
+    }
 
     const row2 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row2.createEl("span", { text: "Size: ", cls: "transcription-audio-label" });
-    const fileSizeEl = row2.createEl("span", { text: "-" });
+    const fileSizeEl = row2.createEl("span", { text: state.fileSizeText });
 
     const row3 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row3.createEl("span", {
       text: "Status: ",
       cls: "transcription-audio-label",
     });
-    const statusEl = row3.createEl("span", { text: "Idle" });
+    const statusEl = row3.createEl("span", { text: state.statusText });
 
     const row4 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row4.createEl("span", {
@@ -624,25 +665,34 @@ export class TranscriptionProgressView extends ItemView {
       cls: "transcription-audio-label",
     });
     const targetFileEl = row4.createEl("a", {
-      text: "-",
-      cls: "internal-link transcription-audio-target-link is-disabled",
+      text: state.targetPath
+        ? `${state.targetPath.split("/").pop() || state.targetPath} (${
+            state.targetLine ?? 0
+          }:${state.targetCh ?? 0})`
+        : "-",
+      cls: "internal-link transcription-audio-target-link",
     });
     targetFileEl.href = "#";
+    if (state.targetPath) {
+      targetFileEl.title = state.targetPath;
+    } else {
+      targetFileEl.classList.add("is-disabled");
+    }
 
     const row5 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row5.createEl("span", {
       text: "Model: ",
       cls: "transcription-audio-label",
     });
-    const modelEl = row5.createEl("span", { text: "-" });
+    const modelEl = row5.createEl("span", { text: state.modelText });
 
     const row6 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row6.createEl("span", {
       text: "Category: ",
       cls: "transcription-audio-label",
     });
-    const categoryEl = row6.createEl("span", { text: "-" });
-    row6.style.display = "none";
+    const categoryEl = row6.createEl("span", { text: state.categoryText ?? "-" });
+    row6.style.display = state.categoryText === undefined ? "none" : "";
 
     const row7 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row7.createEl("span", {
@@ -650,54 +700,51 @@ export class TranscriptionProgressView extends ItemView {
       cls: "transcription-audio-label",
     });
     const transcriptFileEl = row7.createEl("a", {
-      text: "-",
-      cls: "internal-link transcription-audio-file-link is-disabled",
+      text: state.transcriptPath
+        ? state.transcriptPath.split("/").pop() || state.transcriptPath
+        : "-",
+      cls: "internal-link transcription-audio-file-link",
     });
     transcriptFileEl.href = "#";
-    row7.style.display = "none";
+    if (state.transcriptPath) {
+      transcriptFileEl.title = state.transcriptPath;
+    } else {
+      transcriptFileEl.classList.add("is-disabled");
+    }
+    row7.style.display = state.transcriptPath === undefined ? "none" : "";
 
-    // Create log area
-    const logEl = newSessionEl.createEl("div", {
-      cls: "transcription-audio-log",
-    });
+    const logEl = sessionEl.createEl("div", { cls: "transcription-audio-log" });
 
-    // Status bar: indicator + summary message + detail toggle button
     const statusBarEl = logEl.createEl("div", {
       cls: "transcription-audio-latest-log",
     });
-
-    // Status indicator (spinner by default)
     const indicatorEl = statusBarEl.createEl("div", {
       cls: "transcription-audio-indicator",
     });
-    indicatorEl.innerHTML = `<svg class="transcription-audio-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`;
-
-    // Summary message (short, shown in status bar)
     const latestLogEl = statusBarEl.createEl("span", {
-      text: "Log start",
+      text: state.latestLogText,
       cls: "transcription-audio-latest-log-text",
     });
-
-    // Detail toggle button
     const detailButtonEl = statusBarEl.createEl("button", {
-      text: "detail",
+      text: state.isLogExpanded ? "close" : "detail",
       cls: "transcription-audio-detail-button",
     });
-
     const cancelButtonEl = statusBarEl.createEl("button", {
-      text: "cancel",
+      text: state.cancelLabel,
       cls: "transcription-audio-cancel-button",
     });
+    cancelButtonEl.disabled = !state.isCancellable;
 
-    // Log detail area (hidden by default, shows full log history)
     const logHistoryEl = logEl.createEl("div", {
       cls: "transcription-audio-log-history",
     });
-    logHistoryEl.style.display = "none";
+    logHistoryEl.style.display = state.isLogExpanded ? "block" : "none";
 
-    // Create session object
-    const session: TranscriptionSession = {
-      sessionEl: newSessionEl,
+    const session = Object.assign(state, {
+      sessionEl,
+      headerEl,
+      dateEl,
+      closeButtonEl,
       fileNameEl,
       fileSizeEl,
       statusEl,
@@ -713,77 +760,127 @@ export class TranscriptionProgressView extends ItemView {
       cancelButtonEl,
       logHistoryEl,
       indicatorEl,
-      logHistory: [{ text: startText }],
-      pendingRetryChunks: new Set<number>(),
-      failedChunks: new Set<number>(),
-      isLogExpanded: false,
-      isCancellable: true,
-      audioPath: undefined,
-      targetPath: undefined,
-      targetLine: undefined,
-      targetCh: undefined,
-      startedAtMs,
-      chunkTotal: 0,
-      chunkIndex: 0,
-      chunksCompleted: 0,
-    };
+    }) as TranscriptionSession;
 
-    // Detail button click event - toggle only this session's log
-    detailButtonEl.addEventListener("click", () => {
+    this.updateIndicator(session, indicatorStatusOf(state.status));
+    if (state.chunkLabelText !== undefined) {
+      this.ensureChunkUi(session);
+    }
+    if (state.isLogExpanded) {
+      this.renderLogHistory(session);
+    }
+    this.attachSessionHandlers(session);
+    return session;
+  }
+
+  private attachSessionHandlers(session: TranscriptionSession): void {
+    session.detailButtonEl.addEventListener("click", () => {
       this.toggleLogHistory(session);
     });
 
-    fileNameEl.addEventListener("click", (event) => {
+    session.closeButtonEl.addEventListener("click", () => {
+      // Guarded rather than trusting `hidden`: an author-level `display` rule
+      // from Obsidian or a theme overrides the UA stylesheet's [hidden], and a
+      // button that is merely painted over is still focusable and clickable.
+      if (!isRemovableStatus(session.status)) return;
+      this.removeSession(session);
+    });
+
+    session.fileNameEl.addEventListener("click", (event) => {
       event.preventDefault();
       if (session.audioPath) {
         void this.openAudioFile(session);
       }
     });
 
-    targetFileEl.addEventListener("click", (event) => {
+    session.targetFileEl.addEventListener("click", (event) => {
       event.preventDefault();
       if (session.targetPath) {
         void this.openTargetFile(session);
       }
     });
 
-    transcriptFileEl.addEventListener("click", (event) => {
+    session.transcriptFileEl.addEventListener("click", (event) => {
       event.preventDefault();
       if (session.transcriptPath) {
         void this.openFileByPath(session.transcriptPath);
       }
     });
 
-    cancelButtonEl.addEventListener("click", () => {
+    session.cancelButtonEl.addEventListener("click", () => {
       if (!session.isCancellable) {
         return;
       }
 
-      session.isCancellable = false;
-      session.cancelButtonEl.disabled = true;
-      session.cancelButtonEl.setText("cancelling...");
-      session.statusEl.setText("Cancelling");
+      this.setCancelState(session, false, "cancelling...");
+      this.setStatus(session, "Cancelling");
       this.pushLog("Cancelling", "Cancel requested by user", session);
       progressBus.publish({ stage: "cancel-requested" });
     });
+  }
 
+  /** Chunk progress only appears once a run reports its first chunk. */
+  private ensureChunkUi(session: TranscriptionSession): void {
+    if (session.chunkWrapEl) return;
+
+    session.chunkWrapEl = session.sessionEl.createEl("div", {
+      cls: "transcription-audio-chunks",
+    });
+    session.chunkLabelEl = session.chunkWrapEl.createEl("div", {
+      text: session.chunkLabelText ?? "Chunk: -",
+    });
+    session.chunkBarEl = session.chunkWrapEl.createEl("progress");
+    session.chunkBarEl.max = session.chunkBarMax;
+    session.chunkBarEl.value = session.chunkBarValue;
+  }
+
+  private createNewSession(): TranscriptionSession {
+    if (this.currentSession) {
+      // The controller keeps retry context for the most recent run only, so
+      // buttons from the previous session would target the wrong file.
+      for (const entry of this.currentSession.logHistory) {
+        if (entry.retryChunkIndex !== undefined) {
+          entry.retryStale = true;
+        }
+      }
+      this.refreshRetryButtons(this.currentSession);
+    }
+
+    const session = this.renderSession(
+      fromSnapshot(createInitialSession(Date.now(), this.sessionSeq++))
+    );
+    // Anchored to the container rather than to currentSession: after a restore
+    // there are older cards but no current session, and appending would file
+    // the new run underneath them. insertBefore(el, null) appends anyway.
+    this.sessionsContainerEl.insertBefore(
+      session.sessionEl,
+      this.sessionsContainerEl.firstChild
+    );
+    this.sessions.unshift(session);
     this.currentSession = session;
+    this.applyRetention();
     return session;
+  }
+
+  /**
+   * Redraws the whole expanded log. Buttons are recreated from scratch, so
+   * their enabled state has to come from the entry rather than the DOM node
+   * that was just discarded.
+   */
+  private renderLogHistory(session: TranscriptionSession): void {
+    session.logHistoryEl.style.display = "block";
+    session.logHistoryEl.empty();
+    session.logHistory.forEach((entry) => {
+      this.renderLogLine(session, entry);
+    });
+    session.detailButtonEl.setText("close");
   }
 
   private toggleLogHistory(session: TranscriptionSession): void {
     session.isLogExpanded = !session.isLogExpanded;
 
     if (session.isLogExpanded) {
-      // Expand: show all history logs
-      session.logHistoryEl.style.display = "block";
-      session.logHistoryEl.empty();
-      // Buttons are recreated from scratch here, so their enabled/label state
-      // has to come from the entry rather than the discarded DOM node.
-      session.logHistory.forEach((entry) => {
-        this.renderLogLine(session, entry);
-      });
-      session.detailButtonEl.setText("close");
+      this.renderLogHistory(session);
     } else {
       // Collapse: hide history
       session.logHistoryEl.style.display = "none";
@@ -841,6 +938,178 @@ export class TranscriptionProgressView extends ItemView {
     this.register(unsubscribe);
   }
 
+  /**
+   * Every one of these writes the state field beside the DOM node. Skipping
+   * the state half is how a value ends up visible but unsaved, which is the
+   * bug this whole feature exists to fix.
+   */
+  private setStatus(session: TranscriptionSession, text: string): void {
+    session.statusText = text;
+    session.statusEl.setText(text);
+  }
+
+  private setLatestLog(session: TranscriptionSession, text: string): void {
+    session.latestLogText = text;
+    session.latestLogEl.setText(text);
+  }
+
+  private setFileSize(session: TranscriptionSession, bytes: number): void {
+    session.fileSizeText = formatBytes(bytes);
+    session.fileSizeEl.setText(session.fileSizeText);
+  }
+
+  private setModel(session: TranscriptionSession, model: string): void {
+    session.modelText = model;
+    session.modelEl.setText(model);
+  }
+
+  private setCategory(session: TranscriptionSession, category: string): void {
+    session.categoryText = category;
+    session.categoryEl.setText(category);
+    session.categoryRowEl.style.display = "";
+  }
+
+  private setAudioFile(session: TranscriptionSession, path: string): void {
+    session.audioPath = path;
+    session.audioName = path.split("/").pop() || path;
+    session.fileNameEl.setText(session.audioName);
+    session.fileNameEl.title = path;
+    session.fileNameEl.classList.remove("is-disabled");
+  }
+
+  private setTargetFile(
+    session: TranscriptionSession,
+    path: string,
+    line: number,
+    ch: number
+  ): void {
+    session.targetPath = path;
+    session.targetLine = line;
+    session.targetCh = ch;
+    session.targetFileEl.classList.remove("is-disabled");
+    session.targetFileEl.setText(
+      `${path.split("/").pop() || path} (${line}:${ch})`
+    );
+    session.targetFileEl.title = path;
+  }
+
+  private setTranscriptFile(
+    session: TranscriptionSession,
+    path: string
+  ): void {
+    session.transcriptPath = path;
+    session.transcriptFileEl.setText(path.split("/").pop() || path);
+    session.transcriptFileEl.title = path;
+    session.transcriptFileEl.classList.remove("is-disabled");
+    session.transcriptRowEl.style.display = "";
+  }
+
+  private setChunkProgress(
+    session: TranscriptionSession,
+    max: number,
+    value: number,
+    labelText: string
+  ): void {
+    session.chunkBarMax = max;
+    session.chunkBarValue = value;
+    session.chunkLabelText = labelText;
+    this.ensureChunkUi(session);
+    if (session.chunkBarEl) {
+      session.chunkBarEl.max = max;
+      session.chunkBarEl.value = value;
+    }
+    session.chunkLabelEl?.setText(labelText);
+  }
+
+  private setCancelState(
+    session: TranscriptionSession,
+    isCancellable: boolean,
+    label: string
+  ): void {
+    session.isCancellable = isCancellable;
+    session.cancelLabel = label;
+    session.cancelButtonEl.disabled = !isCancellable;
+    session.cancelButtonEl.setText(label);
+  }
+
+  /**
+   * Ends a run: records when it stopped and reveals the remove button, which
+   * stays hidden while there is still work that could be cancelled instead.
+   */
+  private finalizeSession(
+    session: TranscriptionSession,
+    status: SessionStatus,
+    cancelLabel: string
+  ): void {
+    session.status = status;
+    session.endedAtMs = Date.now();
+    this.setCancelState(session, false, cancelLabel);
+    this.updateIndicator(session, indicatorStatusOf(status));
+    session.closeButtonEl.hidden = !isRemovableStatus(status);
+  }
+
+  private removeSession(session: TranscriptionSession): void {
+    session.sessionEl.remove();
+    this.sessions = this.sessions.filter((entry) => entry !== session);
+    if (this.currentSession === session) {
+      // Not reassigned to the next card: a late event such as a chunk re-run
+      // result would then land on an unrelated older run. Leaving it empty
+      // lets the existing guards drop those events, and the next
+      // file-detected starts a fresh session anyway.
+      this.currentSession = undefined;
+    }
+    void this.store.flush();
+  }
+
+  /**
+   * Trims the panel to the configured number of records. A run in progress is
+   * always at index 0 and the limit never drops below one, so it cannot prune
+   * itself away.
+   */
+  private applyRetention(): void {
+    const limit = resolveHistoryLimit(this.getSettings());
+    if (limit === undefined || this.sessions.length <= limit) return;
+
+    for (const session of this.sessions.slice(limit)) {
+      session.sessionEl.remove();
+    }
+    this.sessions = this.sessions.slice(0, limit);
+    if (this.currentSession && this.sessions.indexOf(this.currentSession) < 0) {
+      this.currentSession = undefined;
+    }
+  }
+
+  /** Called by the settings tab so a lowered limit takes effect at once. */
+  applyHistorySettings(): void {
+    this.applyRetention();
+    void this.store.flush();
+  }
+
+  /**
+   * Re-adds records the store holds but the panel is not showing, which is
+   * what switching history back on looks like: the file survived being off,
+   * and saving the panel as-is would otherwise overwrite it.
+   */
+  mergeRestored(snapshots: PersistedSession[]): void {
+    const known: Record<string, true> = {};
+    for (const session of this.sessions) {
+      known[session.id] = true;
+    }
+
+    for (const snapshot of snapshots) {
+      if (known[snapshot.id]) continue;
+      const session = this.renderSession(fromSnapshot(snapshot));
+      this.sessions.push(session);
+    }
+
+    this.sessions.sort((a, b) => b.startedAtMs - a.startedAtMs);
+    // appendChild moves an existing node, so this reorders the cards in place.
+    for (const session of this.sessions) {
+      this.sessionsContainerEl.appendChild(session.sessionEl);
+    }
+    this.applyRetention();
+  }
+
   private updateIndicator(
     session: TranscriptionSession,
     status: "success" | "loading" | "error"
@@ -862,30 +1131,16 @@ export class TranscriptionProgressView extends ItemView {
     }
   }
 
-  private finalizeCancellation(
-    session: TranscriptionSession,
-    label: string
-  ): void {
-    session.isCancellable = false;
-    session.cancelButtonEl.disabled = true;
-    session.cancelButtonEl.setText(label);
-  }
-
   private processEvent(e: ProgressEvent, session: TranscriptionSession): void {
     switch (e.stage) {
       case "model-selected": {
-        session.modelEl.setText(e.model);
+        this.setModel(session, e.model);
         this.pushLog(`Model: ${e.model}`, `Model: ${e.model}`, session);
         break;
       }
       case "target-file-selected": {
         const name = e.path.split("/").pop() || e.path;
-        session.targetPath = e.path;
-        session.targetLine = e.line;
-        session.targetCh = e.ch;
-        session.targetFileEl.classList.remove("is-disabled");
-        session.targetFileEl.setText(`${name} (${e.line}:${e.ch})`);
-        session.targetFileEl.title = e.path;
+        this.setTargetFile(session, e.path, e.line, e.ch);
         this.pushLog(
           `Target selected: ${name}`,
           `Target selected: ${e.path} @ ${e.line}:${e.ch}`,
@@ -897,16 +1152,26 @@ export class TranscriptionProgressView extends ItemView {
   }
 
   private onProgress(e: ProgressEvent): void {
+    this.handleProgress(e);
+
+    // A finished run is worth writing at once; anything else can wait for the
+    // debounce, since a run emits events far faster than a file should be
+    // rewritten.
+    if (TERMINAL_STAGES.indexOf(e.stage) >= 0) {
+      void this.store.flush();
+    } else {
+      this.store.schedule();
+    }
+  }
+
+  private handleProgress(e: ProgressEvent): void {
     switch (e.stage) {
       case "file-detected": {
         // Start new transcription session - add new session container to the top
         const newSession = this.createNewSession();
         const name = e.fileName.split("/").pop() || e.fileName;
-        newSession.audioPath = e.fileName;
-        newSession.fileNameEl.setText(name);
-        newSession.fileNameEl.title = e.fileName;
-        newSession.fileNameEl.classList.remove("is-disabled");
-        newSession.statusEl.setText("File detected");
+        this.setAudioFile(newSession, e.fileName);
+        this.setStatus(newSession, "File detected");
         this.pushLog(
           `File detected: ${name}`,
           `File detected: ${name}`,
@@ -936,7 +1201,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.fileSizeEl.setText(formatBytes(e.sizeBytes));
+        this.setFileSize(this.currentSession, e.sizeBytes);
         const sizeText = formatBytes(e.sizeBytes);
         this.pushLog(
           `Size: ${sizeText}`,
@@ -949,7 +1214,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Preparing audio");
+        this.setStatus(this.currentSession, "Preparing audio");
         this.pushLog("Preparing audio", "Preparing audio", this.currentSession);
         break;
       }
@@ -1000,38 +1265,20 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        // Create chunk UI only when chunk-start event is published
-        if (!this.currentSession.chunkWrapEl) {
-          this.currentSession.chunkWrapEl =
-            this.currentSession.sessionEl.createEl("div", {
-              cls: "transcription-audio-chunks",
-            });
-          this.currentSession.chunkLabelEl =
-            this.currentSession.chunkWrapEl.createEl("div", {
-              text: "Chunk: -",
-            });
-          this.currentSession.chunkBarEl =
-            this.currentSession.chunkWrapEl.createEl("progress");
-          this.currentSession.chunkBarEl.max = 1;
-          this.currentSession.chunkBarEl.value = 0;
-        }
         this.currentSession.chunkTotal = this.chunkDenominator(e);
         this.currentSession.chunkIndex = e.displayIndex ?? e.chunkIndex;
         const rangeText = formatTimeRange(e.startMs, e.endMs);
-        if (
-          this.currentSession.chunkBarEl &&
-          this.currentSession.chunkLabelEl
-        ) {
-          this.currentSession.chunkBarEl.max = this.currentSession.chunkTotal;
-          this.currentSession.chunkBarEl.value = Math.max(
-            this.currentSession.chunkBarEl.value,
+        this.setChunkProgress(
+          this.currentSession,
+          this.currentSession.chunkTotal,
+          // Chunks run in parallel, so the bar must never walk backwards.
+          Math.max(
+            this.currentSession.chunkBarValue,
             this.currentSession.chunkIndex - 1
-          );
-          this.currentSession.chunkLabelEl.setText(
-            `Chunk ${this.currentSession.chunkIndex}/${this.currentSession.chunkTotal} running: ${rangeText}`
-          );
-        }
-        this.currentSession.statusEl.setText("Transcribing chunk");
+          ),
+          `Chunk ${this.currentSession.chunkIndex}/${this.currentSession.chunkTotal} running: ${rangeText}`
+        );
+        this.setStatus(this.currentSession, "Transcribing chunk");
         this.pushLog(
           `${this.chunkPrefix(e)}Chunk start: ${rangeText}`,
           `${this.chunkPrefix(e)}Chunk start: ${rangeText}`,
@@ -1044,19 +1291,14 @@ export class TranscriptionProgressView extends ItemView {
           break;
         }
         this.currentSession.chunksCompleted++;
-        if (
-          this.currentSession.chunkBarEl &&
-          this.currentSession.chunkLabelEl
-        ) {
-          this.currentSession.chunkBarEl.max = this.chunkDenominator(e);
-          this.currentSession.chunkBarEl.value =
-            this.currentSession.chunksCompleted;
-          this.currentSession.chunkLabelEl.setText(
-            `${this.currentSession.chunksCompleted}/${this.chunkDenominator(
-              e
-            )} done`
-          );
-        }
+        this.setChunkProgress(
+          this.currentSession,
+          this.chunkDenominator(e),
+          this.currentSession.chunksCompleted,
+          `${this.currentSession.chunksCompleted}/${this.chunkDenominator(
+            e
+          )} done`
+        );
         this.pushLog(
           `${this.chunkPrefix(e)}Chunk complete`,
           `${this.chunkPrefix(e)}Chunk complete`,
@@ -1100,20 +1342,20 @@ export class TranscriptionProgressView extends ItemView {
         // already succeeded is not, so only the former moves the counter.
         if (e.success && this.currentSession.failedChunks.delete(e.chunkIndex)) {
           this.currentSession.chunksCompleted++;
-          if (this.currentSession.chunkBarEl) {
-            this.currentSession.chunkBarEl.value =
-              this.currentSession.chunksCompleted;
-          }
         }
 
         // chunk-start put the bar label into "running" and the status into
         // "Transcribing chunk"; a re-run emits no chunk-complete, so restore
         // them here instead of leaving the session looking mid-flight.
-        this.currentSession.statusEl.setText(
+        this.setStatus(
+          this.currentSession,
           e.success ? "Chunk re-run done" : "Chunk re-run failed"
         );
-        if (this.currentSession.chunkLabelEl) {
-          this.currentSession.chunkLabelEl.setText(
+        if (this.currentSession.chunkLabelText !== undefined) {
+          this.setChunkProgress(
+            this.currentSession,
+            this.chunkDenominator(e),
+            this.currentSession.chunksCompleted,
             `${this.currentSession.chunksCompleted}/${this.chunkDenominator(
               e
             )} done`
@@ -1148,7 +1390,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Uploading file");
+        this.setStatus(this.currentSession, "Uploading file");
         this.pushLog(
           `${this.chunkPrefix(e)}Uploading file`,
           `${this.chunkPrefix(e)}Uploading file to Google Gen AI`,
@@ -1172,7 +1414,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Requesting API");
+        this.setStatus(this.currentSession, "Requesting API");
         this.pushLog(
           `${this.chunkPrefix(e)}API request start`,
           `${this.chunkPrefix(e)}API request start`,
@@ -1184,7 +1426,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Retrying API");
+        this.setStatus(this.currentSession, "Retrying API");
         const retryMessage = e.message ? ` - ${e.message}` : "";
         this.pushLog(
           `${this.chunkPrefix(e)}API retry: attempt ${e.attempt}`,
@@ -1197,7 +1439,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("API done");
+        this.setStatus(this.currentSession, "API done");
         const durationText = formatDuration(e.elapsedMs);
         this.pushLog(
           `${this.chunkPrefix(e)}API done: ${durationText}`,
@@ -1243,7 +1485,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Transcribing");
+        this.setStatus(this.currentSession, "Transcribing");
         this.pushLog(
           "Step 1: Transcription started",
           "Step 1: Transcribing audio to raw text",
@@ -1268,11 +1510,7 @@ export class TranscriptionProgressView extends ItemView {
           break;
         }
         const fileName = e.path.split("/").pop() || e.path;
-        this.currentSession.transcriptPath = e.path;
-        this.currentSession.transcriptRowEl.style.display = "";
-        this.currentSession.transcriptFileEl.setText(fileName);
-        this.currentSession.transcriptFileEl.title = e.path;
-        this.currentSession.transcriptFileEl.classList.remove("is-disabled");
+        this.setTranscriptFile(this.currentSession, e.path);
         this.pushLog(
           `Transcript: ${fileName}`,
           `Transcription saved to: ${e.path}`,
@@ -1284,7 +1522,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Classifying");
+        this.setStatus(this.currentSession, "Classifying");
         this.pushLog(
           "Step 2: Classification started",
           "Step 2: Classifying transcript category",
@@ -1296,8 +1534,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.categoryRowEl.style.display = "";
-        this.currentSession.categoryEl.setText(e.category);
+        this.setCategory(this.currentSession, e.category);
         const durationText = formatDuration(e.elapsedMs);
         this.pushLog(
           `Step 2: Category: ${e.category} (${durationText})`,
@@ -1310,7 +1547,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Summarizing");
+        this.setStatus(this.currentSession, "Summarizing");
         this.pushLog(
           "Step 3: Summarization started",
           "Step 3: Summarizing transcription with category prompt",
@@ -1334,7 +1571,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Classification failed");
+        this.setStatus(this.currentSession, "Classification failed");
         this.pushLog(
           "Step 2: Classification failed",
           `Step 2: Classification failed - ${e.message}`,
@@ -1353,7 +1590,7 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Summarization failed");
+        this.setStatus(this.currentSession, "Summarization failed");
         this.pushLog(
           "Step 3: Summarization failed",
           `Step 3: Summarization failed - ${e.message}`,
@@ -1375,10 +1612,8 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession.isCancellable) {
           break;
         }
-        this.currentSession.isCancellable = false;
-        this.currentSession.cancelButtonEl.disabled = true;
-        this.currentSession.cancelButtonEl.setText("cancelling...");
-        this.currentSession.statusEl.setText("Cancelling");
+        this.setCancelState(this.currentSession, false, "cancelling...");
+        this.setStatus(this.currentSession, "Cancelling");
         this.pushLog(
           "Cancelling",
           "Cancel requested by user",
@@ -1390,14 +1625,13 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Cancelled");
+        this.setStatus(this.currentSession, "Cancelled");
         this.pushLog(
           "Cancelled by user",
           "Cancelled by user",
           this.currentSession
         );
-        this.updateIndicator(this.currentSession, "error");
-        this.finalizeCancellation(this.currentSession, "cancelled");
+        this.finalizeSession(this.currentSession, "cancelled", "cancelled");
         break;
       }
       case "success": {
@@ -1407,32 +1641,28 @@ export class TranscriptionProgressView extends ItemView {
         const elapsed = this.currentSession.startedAtMs
           ? Date.now() - this.currentSession.startedAtMs
           : 0;
-        this.currentSession.statusEl.setText("Success");
+        this.setStatus(this.currentSession, "Success");
         const elapsedText = formatDuration(elapsed);
         this.pushLog(
           `Success: total ${elapsedText}`,
           `Success: total ${elapsedText}`,
           this.currentSession
         );
-        // Update indicator to check icon
-        this.updateIndicator(this.currentSession, "success");
-        this.finalizeCancellation(this.currentSession, "done");
+        this.finalizeSession(this.currentSession, "success", "done");
         break;
       }
       case "error": {
         if (!this.currentSession) {
           break;
         }
-        this.currentSession.statusEl.setText("Failed");
+        this.setStatus(this.currentSession, "Failed");
         // Show short summary in status bar, full message in log detail
         this.pushLog(
           "API request failed - click detail for more",
           `Failed: ${e.message}`,
           this.currentSession
         );
-        // Update indicator to error icon
-        this.updateIndicator(this.currentSession, "error");
-        this.finalizeCancellation(this.currentSession, "failed");
+        this.finalizeSession(this.currentSession, "error", "failed");
         break;
       }
     }

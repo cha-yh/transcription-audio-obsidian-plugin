@@ -313,6 +313,45 @@
   flex-direction: column;
 }
 
+.transcription-audio-session-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.transcription-audio-session-date {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcription-audio-session-close-button {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 18px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background-color: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+}
+
+/* The UA stylesheet's [hidden] loses to any author `display` rule Obsidian or
+   a theme puts on `button`, so hiding it has to be stated here. */
+.transcription-audio-session-close-button[hidden] {
+  display: none;
+}
+
+.transcription-audio-session-close-button:hover {
+  border-color: var(--text-error);
+  color: var(--text-error);
+}
+
 .transcription-audio-session {
   margin-bottom: 24px;
   padding-bottom: 16px;
