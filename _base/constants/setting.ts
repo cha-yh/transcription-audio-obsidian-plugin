@@ -32,41 +32,6 @@ export const DEFAULT_BASIC_MODE_PROMPT =
   "\n" +
   "The following is the transcribed audio:\n\n";
 
-export const DEFAULT_TEMPLATE_MODE_PROMPT =
-  "Use the transcript to fill the provided markdown template exactly.\n" +
-  "\n" +
-  "Template rules:\n" +
-  "- Keep headings/order from the template exactly.\n" +
-  "- Keep bullet style/checklist style from the template exactly.\n" +
-  "- Replace placeholder values with concise, factual content from transcript.\n" +
-  "- In Timeline, use dynamic ranges with 0.5-step boundaries (e.g., 1/10 ~ 2/10, 2/10 ~ 3.5/10, 3.5/10 ~ 6.5/10, 6.5/10 ~ 10/10).\n" +
-  "- Timeline ranges must be contiguous, non-overlapping, and cover 1/10 through 10/10.\n" +
-  "- If information is missing, write `N/A`.\n" +
-  "- Output only the final markdown note.\n";
-
-export const DEFAULT_OUTPUT_TEMPLATE =
-  "## Executive Summary\n" +
-  "- {{summary-1}}\n" +
-  "- {{summary-2}}\n" +
-  "- {{summary-3}}\n" +
-  "\n" +
-  "## Timeline\n" +
-  "{{timeline-segments}}\n" +
-  "\n" +
-  "## Key Details\n" +
-  "- {{detail-1}}\n" +
-  "- {{detail-2}}\n" +
-  "- {{detail-3}}\n" +
-  "\n" +
-  "## Decisions\n" +
-  "- {{decision-1}}\n" +
-  "\n" +
-  "## Action Items\n" +
-  "- [ ] {{owner-1}} - {{action-1}} (Due: {{due-1}})\n" +
-  "\n" +
-  "## Abstract\n" +
-  "{{abstract-3-5-sentences}}";
-
 export const DEFAULT_TRANSCRIPTION_ONLY_PROMPT =
   "Transcribe the following audio exactly as spoken. " +
   "Output only the raw transcript text. " +
@@ -140,10 +105,6 @@ export const DEFAULT_CATEGORY_PROMPT_PROJECT =
   "- [ ] Owner — action — due date" +
   CATEGORY_PROMPT_BASE;
 
-export const DEFAULT_CATEGORY_PROMPT_GENERAL = DEFAULT_BASIC_MODE_PROMPT;
-
-export const GENERAL_CATEGORY_ID = "general";
-
 export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
   {
     id: "1on1",
@@ -163,21 +124,12 @@ export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
     prompt: DEFAULT_CATEGORY_PROMPT_PROJECT,
     enabled: true,
   },
-  {
-    id: GENERAL_CATEGORY_ID,
-    name: "General",
-    prompt: DEFAULT_CATEGORY_PROMPT_GENERAL,
-    enabled: true,
-  },
 ];
 
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
-  mode: "basic",
+  summarizeTranscript: true,
   model: "gemini-3.7-flash",
   secretApiKeyName: "",
-  enableTemplatePrompt: false,
-  templatePrompt: DEFAULT_TEMPLATE_MODE_PROMPT,
-  outputTemplate: DEFAULT_OUTPUT_TEMPLATE,
   prompt: DEFAULT_BASIC_MODE_PROMPT,
   enableCategoryClassification: false,
   categories: DEFAULT_CATEGORIES,

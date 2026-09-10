@@ -12,11 +12,7 @@ import {
 import { TranscriptionController } from "./controllers/TranscriptionController";
 import { getProgressViewType } from "./_base/constants/progress";
 import { TranscriptionProgressView } from "./_base/ui/TranscriptionProgressView";
-import {
-  AudioPluginSettings,
-  TranscriptionCategory,
-  TranscriptionInputMode,
-} from "_base/types/setting";
+import { AudioPluginSettings, TranscriptionCategory } from "_base/types/setting";
 import {
   MAX_HISTORY_LIMIT,
   MIN_HISTORY_LIMIT,
@@ -33,41 +29,13 @@ import {
 import {
   DEFAULT_SETTINGS,
   MODELS,
-  MODEL_MIGRATIONS,
   DEFAULT_BASIC_MODE_PROMPT,
-  DEFAULT_TEMPLATE_MODE_PROMPT,
-  DEFAULT_OUTPUT_TEMPLATE,
   DEFAULT_CATEGORIES,
-  GENERAL_CATEGORY_ID,
 } from "_base/constants/setting";
+import { getCompatibleSettings } from "_base/utils/settingsCompatibility";
 
 const SECRET_STORAGE_VERSION_MESSAGE =
   "Secure API key storage requires Obsidian 1.11.4+. Please update Obsidian to use this field.";
-
-const MODE_OPTIONS: Record<string, string> = {
-  basic: "Prompt only mode",
-  transcription: "Transcription mode",
-  "transcription-only": "Transcription only mode",
-};
-
-const MODE_DESCRIPTIONS: Record<TranscriptionInputMode, string> = {
-  basic: "Sends the audio directly with the prompt.",
-  transcription:
-    "Creates a transcript from the audio, then runs the prompt against that transcript. This uses additional tokens for transcript generation.",
-  "transcription-only": "Creates only a transcript from the audio.",
-};
-
-type LegacyTranscriptionInputMode = TranscriptionInputMode | "template";
-
-type SavedAudioPluginSettings = Omit<
-  Partial<AudioPluginSettings>,
-  "mode"
-> & {
-  mode?: LegacyTranscriptionInputMode;
-  apiKey?: string;
-  enableTranscribeThenSummarize?: boolean;
-  transcriptionOnly?: boolean;
-};
 
 function canUseSecretStorage(app: App): boolean {
   return typeof app.secretStorage?.getSecret === "function";
@@ -75,22 +43,6 @@ function canUseSecretStorage(app: App): boolean {
 
 function canUseSecretComponent(app: App): boolean {
   return typeof SecretComponent === "function" && canUseSecretStorage(app);
-}
-
-function cloneCategories(
-  categories: TranscriptionCategory[]
-): TranscriptionCategory[] {
-  return categories.map((category) => ({ ...category }));
-}
-
-function isTranscriptionInputMode(
-  mode: LegacyTranscriptionInputMode | undefined
-): mode is TranscriptionInputMode {
-  return (
-    mode === "basic" ||
-    mode === "transcription" ||
-    mode === "transcription-only"
-  );
 }
 
 export default class TranscriptionAudioPlugin extends Plugin {
@@ -216,80 +168,10 @@ export default class TranscriptionAudioPlugin extends Plugin {
   }
 
   async loadSettings() {
-    const savedSettings = (await this.loadData()) as
-      | SavedAudioPluginSettings
-      | null;
-    const {
-      apiKey: deprecatedApiKey,
-      mode: savedMode,
-      enableTranscribeThenSummarize: deprecatedTranscribeThenSummarize,
-      transcriptionOnly: deprecatedTranscriptionOnly,
-      ...settingsWithoutDeprecatedFields
-    } = savedSettings ?? {};
-    this.settings = Object.assign(
-      {},
-      DEFAULT_SETTINGS,
-      settingsWithoutDeprecatedFields
-    );
+    const { settings, shouldSave } = getCompatibleSettings(await this.loadData());
+    this.settings = settings;
 
-    const savedCategories: TranscriptionCategory[] =
-      savedSettings && Array.isArray(savedSettings.categories)
-        ? savedSettings.categories
-        : [];
-    this.settings.categories = cloneCategories(
-      savedCategories.length > 0 ? savedCategories : DEFAULT_CATEGORIES
-    );
-    let shouldSaveSettings =
-      deprecatedApiKey !== undefined ||
-      deprecatedTranscribeThenSummarize !== undefined ||
-      deprecatedTranscriptionOnly !== undefined ||
-      savedMode === "template";
-
-    if (savedMode === "template") {
-      this.settings.enableTemplatePrompt = true;
-    }
-
-    if (deprecatedTranscribeThenSummarize || deprecatedTranscriptionOnly) {
-      this.settings.mode = deprecatedTranscriptionOnly
-        ? "transcription-only"
-        : "transcription";
-    } else if (savedMode === "template") {
-      this.settings.mode = "basic";
-    } else if (isTranscriptionInputMode(savedMode)) {
-      this.settings.mode = savedMode;
-    } else {
-      this.settings.mode = DEFAULT_SETTINGS.mode;
-    }
-
-    const previousModel = this.settings.model;
-    const migratedModel = MODEL_MIGRATIONS[previousModel] || previousModel;
-    if (MODELS.includes(migratedModel)) {
-      this.settings.model = migratedModel;
-    } else {
-      this.settings.model = DEFAULT_SETTINGS.model;
-    }
-
-    // Migrate existing categories without enabled field
-    for (const cat of this.settings.categories) {
-      if (cat.enabled === undefined) {
-        cat.enabled = (cat.prompt || "").trim().length > 0;
-        shouldSaveSettings = true;
-      }
-    }
-
-    if (this.settings.model !== previousModel) {
-      shouldSaveSettings = true;
-    }
-
-    // A limit stored as 0, negative or NaN would silently disable retention.
-    const storedLimit = clampHistoryLimit(this.settings.sessionHistoryLimit);
-    if (storedLimit !== this.settings.sessionHistoryLimit) {
-      this.settings.sessionHistoryLimit =
-        storedLimit ?? DEFAULT_SETTINGS.sessionHistoryLimit;
-      shouldSaveSettings = true;
-    }
-
-    if (shouldSaveSettings) {
+    if (shouldSave) {
       await this.saveSettings();
     }
   }
@@ -309,34 +191,14 @@ export default class TranscriptionAudioPlugin extends Plugin {
       new Notice(SECRET_STORAGE_VERSION_MESSAGE);
     }
 
-    const selectedMode = this.settings.mode || "basic";
-    const usePromptSettings =
-      selectedMode === "basic" ||
-      (selectedMode === "transcription" &&
-        !this.settings.enableCategoryClassification);
-    const useTemplatePrompt =
-      usePromptSettings && this.settings.enableTemplatePrompt;
-    const prompt = useTemplatePrompt
-      ? this.settings.templatePrompt || DEFAULT_TEMPLATE_MODE_PROMPT
-      : this.settings.prompt;
-    const outputTemplate = useTemplatePrompt
-      ? this.settings.outputTemplate || DEFAULT_OUTPUT_TEMPLATE
-      : "";
-    const enableTranscribeThenSummarize =
-      selectedMode === "transcription" || selectedMode === "transcription-only";
-    const transcriptionOnly = selectedMode === "transcription-only";
-
-    await this.transcriptionController.run(
-      editor,
+    await this.transcriptionController.run(editor, {
       apiKey,
-      prompt,
-      this.settings.model,
-      outputTemplate,
-      enableTranscribeThenSummarize,
-      transcriptionOnly,
-      this.settings.enableCategoryClassification,
-      this.settings.categories
-    );
+      prompt: this.settings.prompt || DEFAULT_BASIC_MODE_PROMPT,
+      model: this.settings.model,
+      summarizeTranscript: this.settings.summarizeTranscript,
+      enableCategoryClassification: this.settings.enableCategoryClassification,
+      categories: this.settings.categories,
+    });
   }
 }
 
@@ -421,14 +283,9 @@ class TranscriptionSettingTab extends PluginSettingTab {
 
     for (let i = 0; i < categories.length; i++) {
       const cat = categories[i];
-      const isGeneral = cat.id === GENERAL_CATEGORY_ID;
       const isDisabled = !cat.enabled;
 
-      const descText = isGeneral
-        ? "Default fallback category"
-        : isDisabled
-        ? "Prompt required to enable"
-        : "";
+      const descText = isDisabled ? "Prompt required to enable" : "";
 
       const setting = new Setting(containerEl).setName(cat.name);
       if (descText) setting.setDesc(descText);
@@ -442,7 +299,6 @@ class TranscriptionSettingTab extends PluginSettingTab {
             new CategoryEditModal(
               this.app,
               cat,
-              isGeneral,
               DEFAULT_CATEGORIES.find((d) => d.id === cat.id) || null,
               async () => {
                 await this.plugin.saveSettings();
@@ -452,23 +308,20 @@ class TranscriptionSettingTab extends PluginSettingTab {
           });
       });
 
-      // Delete button (except General)
-      if (!isGeneral) {
-        setting.addExtraButton((btn) => {
-          btn
-            .setIcon("trash")
-            .setTooltip("Delete category")
-            .onClick(async () => {
-              const confirmed = await this.confirmReset(
-                `Delete category "${cat.name}"?`
-              );
-              if (!confirmed) return;
-              this.plugin.settings.categories.splice(i, 1);
-              await this.plugin.saveSettings();
-              this.display();
-            });
-        });
-      }
+      setting.addExtraButton((btn) => {
+        btn
+          .setIcon("trash")
+          .setTooltip("Delete category")
+          .onClick(async () => {
+            const confirmed = await this.confirmReset(
+              `Delete category "${cat.name}"?`
+            );
+            if (!confirmed) return;
+            this.plugin.settings.categories.splice(i, 1);
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
     }
 
     // Add category
@@ -509,139 +362,6 @@ class TranscriptionSettingTab extends PluginSettingTab {
           this.display();
         });
       });
-  }
-
-  private displayPromptOnlySettings(containerEl: HTMLElement): void {
-    new Setting(containerEl)
-      .setName("Template prompt")
-      .setDesc(
-        "Use a dedicated prompt and markdown template for the final output."
-      )
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.enableTemplatePrompt)
-          .onChange(async (value) => {
-            this.plugin.settings.enableTemplatePrompt = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
-
-    if (this.plugin.settings.enableTemplatePrompt) {
-      new Setting(containerEl)
-        .setName("Template prompt instructions")
-        .setDesc(
-          "Prompt used with the output template for deterministic note generation guidance."
-        )
-        .addTextArea((text) => {
-          if (text.inputEl) {
-            text.inputEl.classList.add("transcription-audio-setting-text-area");
-          }
-          text
-            .setPlaceholder(DEFAULT_SETTINGS.templatePrompt)
-            .setValue(
-              this.plugin.settings.templatePrompt ||
-                DEFAULT_TEMPLATE_MODE_PROMPT
-            )
-            .onChange(async (value) => {
-              this.plugin.settings.templatePrompt = value;
-              await this.plugin.saveSettings();
-            });
-
-          this.addInlineResetButton(
-            text.inputEl,
-            "Reset to default",
-            async () => {
-              const confirmed = await this.confirmReset(
-                "Reset the template prompt to its default value?"
-              );
-              if (!confirmed) {
-                return;
-              }
-
-              this.plugin.settings.templatePrompt =
-                DEFAULT_TEMPLATE_MODE_PROMPT;
-              await this.plugin.saveSettings();
-              new Notice("Template prompt reset to default.");
-              this.display();
-            }
-          );
-        });
-
-      new Setting(containerEl)
-        .setName("Output template")
-        .setDesc(
-          "Final output is formatted to this markdown template for consistency."
-        )
-        .addTextArea((text) => {
-          if (text.inputEl) {
-            text.inputEl.classList.add("transcription-audio-setting-text-area");
-          }
-          text
-            .setPlaceholder(DEFAULT_OUTPUT_TEMPLATE)
-            .setValue(
-              this.plugin.settings.outputTemplate || DEFAULT_OUTPUT_TEMPLATE
-            )
-            .onChange(async (value) => {
-              this.plugin.settings.outputTemplate = value;
-              await this.plugin.saveSettings();
-            });
-
-          this.addInlineResetButton(
-            text.inputEl,
-            "Reset to default",
-            async () => {
-              const confirmed = await this.confirmReset(
-                "Reset the output template to its default value?"
-              );
-              if (!confirmed) {
-                return;
-              }
-
-              this.plugin.settings.outputTemplate = DEFAULT_OUTPUT_TEMPLATE;
-              await this.plugin.saveSettings();
-              new Notice("Output template reset to default.");
-              this.display();
-            }
-          );
-        });
-    } else {
-      new Setting(containerEl)
-        .setName("Prompt")
-        .setDesc(
-          "Prompt that will be sent to the AI right before adding your transcribed audio"
-        )
-        .addTextArea((text) => {
-          if (text.inputEl) {
-            text.inputEl.classList.add("transcription-audio-setting-text-area");
-          }
-          text
-            .setPlaceholder(DEFAULT_SETTINGS.prompt)
-            .setValue(this.plugin.settings.prompt)
-            .onChange(async (value) => {
-              this.plugin.settings.prompt = value;
-              await this.plugin.saveSettings();
-            });
-
-          this.addInlineResetButton(
-            text.inputEl,
-            "Reset to default",
-            async () => {
-              const confirmed = await this.confirmReset(
-                "Reset the Prompt only mode prompt to its default value?"
-              );
-              if (!confirmed) {
-                return;
-              }
-
-              this.plugin.settings.prompt = DEFAULT_BASIC_MODE_PROMPT;
-              await this.plugin.saveSettings();
-              new Notice("Prompt reset to default.");
-              this.display();
-            }
-          );
-        });
-    }
   }
 
   private displayHistorySettings(containerEl: HTMLElement): void {
@@ -721,7 +441,6 @@ class TranscriptionSettingTab extends PluginSettingTab {
         text.inputEl.addEventListener("change", snapToStoredValue);
       });
   }
-
   display(): void {
     let { containerEl } = this;
     containerEl.empty();
@@ -766,54 +485,63 @@ class TranscriptionSettingTab extends PluginSettingTab {
         });
       });
 
-    const selectedMode = this.plugin.settings.mode || "basic";
+    new Setting(containerEl)
+      .setName("Summarize transcript")
+      .setDesc("A transcript is always created. Turn this off to save only the transcript.")
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.summarizeTranscript)
+          .onChange(async (value) => {
+            this.plugin.settings.summarizeTranscript = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    if (!this.plugin.settings.summarizeTranscript) return;
 
     new Setting(containerEl)
-      .setName("Transcription mode")
-      .addDropdown((dropdown) => {
-        dropdown.addOptions(MODE_OPTIONS);
-        dropdown.setValue(selectedMode);
-        dropdown.onChange(async (value) => {
-          this.plugin.settings.mode =
-            value === "transcription" || value === "transcription-only"
-              ? value
-              : "basic";
+      .setName("Default prompt")
+      .setDesc("Used for summarization and whenever no category matches.")
+      .addTextArea((text) => {
+        text.inputEl.classList.add("transcription-audio-setting-text-area");
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.prompt)
+          .setValue(this.plugin.settings.prompt)
+          .onChange(async (value) => {
+            this.plugin.settings.prompt = value;
+            await this.plugin.saveSettings();
+          });
+
+        this.addInlineResetButton(text.inputEl, "Reset to default", async () => {
+          const confirmed = await this.confirmReset(
+            "Reset the default prompt to its default value?"
+          );
+          if (!confirmed) return;
+          this.plugin.settings.prompt = DEFAULT_BASIC_MODE_PROMPT;
           await this.plugin.saveSettings();
+          new Notice("Prompt reset to default.");
           this.display();
         });
       });
 
-    this.displayDescriptionBlock(
-      containerEl,
-      `Transcription mode: ${MODE_OPTIONS[selectedMode]}`,
-      MODE_DESCRIPTIONS[selectedMode]
-    );
+    new Setting(containerEl)
+      .setName("Category classification")
+      .setDesc(
+        "Classify each transcript and use the matching category prompt. The default prompt is used when no category matches."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.enableCategoryClassification)
+          .onChange(async (value) => {
+            this.plugin.settings.enableCategoryClassification = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
 
-    if (this.plugin.settings.mode === "transcription-only") {
-      // Transcription-only mode: no prompt or template needed
-    } else if ((this.plugin.settings.mode || "basic") === "basic") {
-      this.displayPromptOnlySettings(containerEl);
-    } else {
-      new Setting(containerEl)
-        .setName("Category classification")
-        .setDesc(
-          "When enabled, AI classifies each transcript into a category and uses that category's prompt. When disabled, prompt settings below are used for all transcripts."
-        )
-        .addToggle((toggle) => {
-          toggle
-            .setValue(this.plugin.settings.enableCategoryClassification)
-            .onChange(async (value) => {
-              this.plugin.settings.enableCategoryClassification = value;
-              await this.plugin.saveSettings();
-              this.display();
-            });
-        });
-
-      if (this.plugin.settings.enableCategoryClassification) {
-        this.displayCategorySettings(containerEl);
-      } else {
-        this.displayPromptOnlySettings(containerEl);
-      }
+    if (this.plugin.settings.enableCategoryClassification) {
+      this.displayCategorySettings(containerEl);
     }
 
     this.displayHistorySettings(containerEl);
@@ -874,7 +602,6 @@ class CategoryEditModal extends Modal {
   constructor(
     app: App,
     private cat: TranscriptionCategory,
-    private isGeneral: boolean,
     private defaultCat: TranscriptionCategory | null,
     private onSave: () => Promise<void>
   ) {
@@ -891,7 +618,6 @@ class CategoryEditModal extends Modal {
     // Name
     new Setting(contentEl).setName("Name").addText((text) => {
       text.setValue(this.cat.name);
-      if (this.isGeneral) text.setDisabled(true);
       text.onChange((value) => {
         this.cat.name = value.trim() || this.cat.name;
       });

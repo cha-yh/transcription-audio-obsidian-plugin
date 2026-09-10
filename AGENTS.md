@@ -32,6 +32,10 @@ Vitest runs in a Node environment with `obsidian` aliased to `tests/__mocks__/ob
 
 Note what that Node environment does _not_ prove: it provides `Buffer`, `process` and other globals the mobile WebView has no idea about, so code depending on them passes every test and then throws on a phone (issue #3). Do not reach for a Node global in `_base/`, `controllers/` or `main.ts` — `yarn check:mobile` scans the built bundle and fails the build when one appears, dependencies included, because esbuild marks Node builtins external and lets them through silently.
 
+## Backward Compatibility
+
+When changing persisted settings, saved data, or user-visible configuration, preserve existing users' data. Put legacy-field conversion in a focused utility under `_base/utils`, return whether the migrated result must be saved, and cover every retired format and fallback with unit tests. Keep compatibility code out of runtime workflows and remove it only in a deliberate breaking-change release.
+
 ## Commit & Pull Request Guidelines
 
 Recent history uses Conventional Commit prefixes such as `feat:`, `fix:`, `docs:`, `test:`, and `chore:`. Keep commit subjects imperative and scoped to one change. Pull requests should include a concise summary, test results, linked issues when applicable, and screenshots or short recordings for visible Obsidian UI changes such as settings or progress panel updates.

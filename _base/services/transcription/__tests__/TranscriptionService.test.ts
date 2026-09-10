@@ -408,7 +408,7 @@ describe("TranscriptionService", () => {
       const result = await service.classifyTranscript(
         apiKey,
         "some transcript",
-        ["1on1", "Tech Meeting", "General"],
+        ["1on1", "Tech Meeting"],
         model
       );
 

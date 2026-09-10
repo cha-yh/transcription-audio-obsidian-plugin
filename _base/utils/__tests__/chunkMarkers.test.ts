@@ -3,6 +3,7 @@ import {
   hasChunkMarker,
   readChunkBody,
   replaceChunkBody,
+  stripChunkMarkers,
   wrapChunkBody,
 } from "../chunkMarkers";
 
@@ -205,5 +206,57 @@ describe("skipped chunk bodies", () => {
     expect(readChunkBody(doc, 2)).toBe("turns out someone did talk here");
     expect(doc).not.toContain("No speech detected");
     expect(readChunkBody(doc, 1)).toBe("spoken");
+  });
+});
+
+describe("stripChunkMarkers", () => {
+  it("leaves the speech and drops the marker lines", () => {
+    const body = [
+      wrapChunkBody(1, "First chunk."),
+      wrapChunkBody(2, "Second chunk."),
+    ].join("\n\n");
+
+    expect(stripChunkMarkers(body)).toBe("First chunk.\n\nSecond chunk.");
+  });
+
+  it("drops skip notes as well as chunk markers", () => {
+    const body = [
+      wrapChunkBody(1, "Only speech."),
+      wrapChunkBody(2, "%%[No speech detected — 20:00–40:00 skipped]%%"),
+    ].join("\n\n");
+
+    expect(stripChunkMarkers(body)).toBe("Only speech.");
+  });
+
+  it("leaves an unmarked transcript untouched", () => {
+    expect(stripChunkMarkers("Plain transcript text.")).toBe(
+      "Plain transcript text."
+    );
+  });
+
+  it("removes pending and failed placeholders", () => {
+    const body = [
+      wrapChunkBody(1, "Real speech here."),
+      wrapChunkBody(2, "{{CHUNK_FAILED:2}}"),
+      wrapChunkBody(3, "{{CHUNK_PENDING:3}}"),
+      wrapChunkBody(4, "More speech."),
+    ].join("\n\n");
+
+    expect(stripChunkMarkers(body)).toBe("Real speech here.\n\nMore speech.");
+  });
+
+  it("returns nothing when every chunk failed", () => {
+    const body = [
+      wrapChunkBody(1, "{{CHUNK_FAILED:1}}"),
+      wrapChunkBody(2, "{{CHUNK_FAILED:2}}"),
+    ].join("\n\n");
+
+    expect(stripChunkMarkers(body)).toBe("");
+  });
+
+  it("keeps %% that is not a marker", () => {
+    expect(stripChunkMarkers("He said 100%% of the time.")).toBe(
+      "He said 100%% of the time."
+    );
   });
 });

@@ -6,10 +6,9 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 
 - Smart audio detection from links or embeds in the active note
 - Google Gemini transcription, transcript generation, and summarization
-- Prompt only, transcription, and transcription only modes
+- Always-on transcription with optional transcript summarization
 - Long-audio transcription with time-based chunking and chunk retry handling
 - Category classification for transcript-based summarization
-- Template prompt controls for consistent Markdown output
 - Reusable transcript file creation and transcript file links
 - Progress panel (sidebar) with live status:
   - Detected audio filename and size
@@ -40,15 +39,11 @@ Open Settings → Transcription Audio:
 
 - API Key: Configure the Gemini API key to use. The deprecated plain-text API key input has been removed.
 - On older Obsidian versions, API key storage is disabled and you will see an update-required message (Obsidian 1.11.4+)
-- Transcription mode:
-  - Prompt only mode (default): sends audio directly with the configured prompt
-  - Transcription mode: transcribes audio first, then summarizes the raw transcript
-  - Transcription only mode: creates the raw transcript and skips summarization
+- Summarize transcript (default: on): transcription is always created; turn this off to create and link only the raw transcript.
 - Model: Select a Gemini-compatible model (`gemini-3.7-flash`(default), `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
-- Prompt: Customize the instruction for Prompt only mode and transcript summarization
-- Template prompt: Toggle in Prompt only mode to show Instructions and Output template fields for a consistent final markdown structure
-- Category classification: Available in Transcription mode. When disabled, Transcription mode uses the same Prompt/Template prompt settings as Prompt only mode.
+- Default prompt: Customize the instruction used to summarize transcripts and as the fallback when a category does not match.
+- Category classification: When enabled, the matching category prompt is used. The `General` category is not included; unmatched transcripts use the default prompt.
 - Keep run history: Keeps the progress panel's records across plugin reloads and updates. Turning it off stops new records being saved; records already on disk are left alone and come back when you turn it on again.
   - Auto-remove old records: Drops the oldest records once the panel passes the limit.
   - Records to keep: How many runs stay in the panel (1-200, default 20). A run in progress is always kept.
