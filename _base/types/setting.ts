@@ -11,9 +11,6 @@ export interface AudioPluginSettings {
   model: string;
   secretApiKeyName: string;
   prompt: string;
-  enableTemplatePrompt: boolean;
-  templatePrompt: string;
-  outputTemplate: string;
   enableCategoryClassification: boolean;
   categories: TranscriptionCategory[];
 }

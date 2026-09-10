@@ -103,6 +103,16 @@ function createMockApp() {
       read: vi.fn(),
       process: vi.fn(),
     },
+    metadataCache: {
+      getFileCache: vi.fn(() => null),
+    },
+    fileManager: {
+      processFrontMatter: vi.fn(
+        async (_file: unknown, fn: (frontmatter: any) => void) => {
+          fn({});
+        }
+      ),
+    },
     workspace: {
       getActiveFile: vi.fn(),
       getLeavesOfType: vi.fn(() => []),
@@ -275,6 +285,136 @@ describe("TranscriptionController — pure helpers", () => {
       await Promise.all([p1, p2, p3]);
 
       expect(fileContent).toBe("initial-a-b-c");
+    });
+  });
+
+  describe("createTranscriptionTempFile", () => {
+    it("quotes the audio path so a name holding `: ` stays parseable", async () => {
+      const app = createMockApp();
+      const ctrl = new TranscriptionController(app, "test-progress-view");
+
+      await (ctrl as any).createTranscriptionTempFile(
+        "Recordings/Meeting: Q3 review.m4a",
+        "transcript body"
+      );
+
+      const [, content] = app.vault.create.mock.calls[0];
+      expect(content).toContain(
+        'audio: "Recordings/Meeting: Q3 review.m4a"'
+      );
+    });
+  });
+
+  describe("writeTranscriptCategory", () => {
+    it("stamps the category onto the given transcript file", async () => {
+      const app = createMockApp();
+      const ctrl = new TranscriptionController(app, "test-progress-view");
+      const mockFile = Object.assign(Object.create(MockTFile.prototype), {
+        path: "dir/_transcription_audio_2024.md",
+      });
+      app.vault.getAbstractFileByPath.mockReturnValue(mockFile);
+
+      const written: Record<string, unknown> = {};
+      app.fileManager.processFrontMatter.mockImplementation(
+        async (_file: unknown, fn: (frontmatter: any) => void) => fn(written)
+      );
+
+      await (ctrl as any).writeTranscriptCategory(
+        "dir/_transcription_audio_2024.md",
+        "1on1"
+      );
+
+      expect(written.category).toBe("1on1");
+    });
+
+    it("does nothing when there is no transcript file", async () => {
+      const app = createMockApp();
+      const ctrl = new TranscriptionController(app, "test-progress-view");
+
+      await (ctrl as any).writeTranscriptCategory(null, "1on1");
+
+      expect(app.fileManager.processFrontMatter).not.toHaveBeenCalled();
+    });
+
+    it("survives an unparseable frontmatter block", async () => {
+      const app = createMockApp();
+      const ctrl = new TranscriptionController(app, "test-progress-view");
+      const mockFile = Object.assign(Object.create(MockTFile.prototype), {
+        path: "dir/_transcription_audio_2024.md",
+      });
+      app.vault.getAbstractFileByPath.mockReturnValue(mockFile);
+      app.fileManager.processFrontMatter.mockRejectedValue(
+        new Error("YAMLParseError")
+      );
+
+      await expect(
+        (ctrl as any).writeTranscriptCategory(
+          "dir/_transcription_audio_2024.md",
+          "1on1"
+        )
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe("findExistingTranscription", () => {
+    const transcriptFile = (path: string) =>
+      Object.assign(Object.create(MockTFile.prototype), {
+        path,
+        name: path.split("/").pop(),
+        stat: { mtime: 1 },
+      });
+
+    it("reads the category from the metadata cache, not the raw text", async () => {
+      const app = createMockApp();
+      const ctrl = new TranscriptionController(app, "test-progress-view");
+      const file = transcriptFile("dir/_transcription_audio_2024.md");
+      app.vault.getFiles.mockReturnValue([file]);
+      app.vault.read.mockResolvedValue(
+        "---\ncategory: Tech Meeting\n---\n\n## Transcription\n\n" +
+          "%%chunk:1%%\nSpoken words.\n%%/chunk:1%%\n"
+      );
+      app.metadataCache.getFileCache.mockReturnValue({
+        frontmatter: { category: "Tech Meeting" },
+      });
+
+      const result = await (ctrl as any).findExistingTranscription(
+        "dir/audio.wav"
+      );
+
+      expect(result.category).toBe("Tech Meeting");
+      expect(result.text).toBe("Spoken words.");
+    });
+
+    it("returns null when every chunk is an unresolved placeholder", async () => {
+      const app = createMockApp();
+      const ctrl = new TranscriptionController(app, "test-progress-view");
+      const file = transcriptFile("dir/_transcription_audio_2024.md");
+      app.vault.getFiles.mockReturnValue([file]);
+      app.vault.read.mockResolvedValue(
+        "---\n---\n\n## Transcription\n\n" +
+          "%%chunk:1%%\n{{CHUNK_FAILED:1}}\n%%/chunk:1%%\n"
+      );
+
+      const result = await (ctrl as any).findExistingTranscription(
+        "dir/audio.wav"
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it("ignores an unfinished _temp transcript", async () => {
+      const app = createMockApp();
+      const ctrl = new TranscriptionController(app, "test-progress-view");
+      app.vault.getFiles.mockReturnValue([
+        transcriptFile("dir/_transcription_audio_2024_temp.md"),
+      ]);
+
+      const result = await (ctrl as any).findExistingTranscription(
+        "dir/audio.wav"
+      );
+
+      expect(result).toBeNull();
+      expect(app.vault.read).not.toHaveBeenCalled();
     });
   });
 

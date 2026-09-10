@@ -95,21 +95,14 @@ export default class TranscriptionAudioPlugin extends Plugin {
       new Notice(SECRET_STORAGE_VERSION_MESSAGE);
     }
 
-    const prompt = this.settings.prompt || DEFAULT_BASIC_MODE_PROMPT;
-    const enableTranscribeThenSummarize = true;
-    const transcriptionOnly = !this.settings.summarizeTranscript;
-
-    await this.transcriptionController.run(
-      editor,
+    await this.transcriptionController.run(editor, {
       apiKey,
-      prompt,
-      this.settings.model,
-      "",
-      enableTranscribeThenSummarize,
-      transcriptionOnly,
-      this.settings.enableCategoryClassification,
-      this.settings.categories
-    );
+      prompt: this.settings.prompt || DEFAULT_BASIC_MODE_PROMPT,
+      model: this.settings.model,
+      summarizeTranscript: this.settings.summarizeTranscript,
+      enableCategoryClassification: this.settings.enableCategoryClassification,
+      categories: this.settings.categories,
+    });
   }
 }
 
@@ -354,6 +347,7 @@ class TranscriptionSettingTab extends PluginSettingTab {
           if (!confirmed) return;
           this.plugin.settings.prompt = DEFAULT_BASIC_MODE_PROMPT;
           await this.plugin.saveSettings();
+          new Notice("Prompt reset to default.");
           this.display();
         });
       });

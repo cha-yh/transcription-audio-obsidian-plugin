@@ -8,6 +8,14 @@
  * which is what makes per-chunk retry possible once a chunk has succeeded.
  */
 
+/**
+ * Placeholders standing in for a chunk that has not produced text yet, or that
+ * failed. Both are marker syntax, so `stripChunkMarkers` owns removing them.
+ */
+export const CHUNK_PENDING_PREFIX = "{{CHUNK_PENDING:";
+export const CHUNK_FAILED_PREFIX = "{{CHUNK_FAILED:";
+export const CHUNK_PLACEHOLDER_SUFFIX = "}}";
+
 function chunkBodyPattern(chunkIndex: number): RegExp {
   return new RegExp(
     `(%%chunk:${chunkIndex}%%\\n)([\\s\\S]*?)(\\n%%/chunk:${chunkIndex}%%)`
@@ -52,4 +60,20 @@ export function replaceChunkBody(
   return data.replace(pattern, (_match, open: string, _body, close: string) =>
     `${open}${newBody}${close}`
   );
+}
+
+/**
+ * Removes the marker syntax — chunk boundaries, skip notes and the pending and
+ * failed placeholders — from a transcription file's body, leaving only the
+ * speech. The markers stay in the file — they are what makes per-chunk retry
+ * possible — but they are noise, and billed tokens, when a stored transcript is
+ * handed back to the model for classification or summarization.
+ */
+export function stripChunkMarkers(data: string): string {
+  return data
+    .replace(/^%%\/?chunk:\d+%%\n?/gm, "")
+    .replace(/^%%\[No speech detected[^\]]*\]%%\n?/gm, "")
+    .replace(/\{\{CHUNK_(?:PENDING|FAILED):\d+\}\}\n?/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

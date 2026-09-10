@@ -5,7 +5,6 @@ import {
   MODELS,
   MODEL_MIGRATIONS,
   DEFAULT_BASIC_MODE_PROMPT,
-  DEFAULT_TEMPLATE_MODE_PROMPT,
   DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
   DEFAULT_CATEGORY_PROMPT_1ON1,
   DEFAULT_CATEGORY_PROMPT_TECH_MEETING,
@@ -17,24 +16,23 @@ describe("DEFAULT_SETTINGS", () => {
     expect(DEFAULT_SETTINGS).toHaveProperty("summarizeTranscript");
     expect(DEFAULT_SETTINGS).toHaveProperty("model");
     expect(DEFAULT_SETTINGS).toHaveProperty("secretApiKeyName");
-    expect(DEFAULT_SETTINGS).toHaveProperty("enableTemplatePrompt");
-    expect(DEFAULT_SETTINGS).toHaveProperty("templatePrompt");
-    expect(DEFAULT_SETTINGS).toHaveProperty("outputTemplate");
     expect(DEFAULT_SETTINGS).toHaveProperty("prompt");
     expect(DEFAULT_SETTINGS).toHaveProperty("enableCategoryClassification");
     expect(DEFAULT_SETTINGS).toHaveProperty("categories");
   });
 
-  it("does not expose deprecated transcription toggle fields", () => {
+  it("does not expose deprecated transcription or template fields", () => {
     expect(DEFAULT_SETTINGS).not.toHaveProperty(
       "enableTranscribeThenSummarize"
     );
     expect(DEFAULT_SETTINGS).not.toHaveProperty("transcriptionOnly");
+    expect(DEFAULT_SETTINGS).not.toHaveProperty("enableTemplatePrompt");
+    expect(DEFAULT_SETTINGS).not.toHaveProperty("templatePrompt");
+    expect(DEFAULT_SETTINGS).not.toHaveProperty("outputTemplate");
   });
 
   it("has valid default values", () => {
     expect(DEFAULT_SETTINGS.summarizeTranscript).toBe(true);
-    expect(DEFAULT_SETTINGS.enableTemplatePrompt).toBe(false);
     expect(DEFAULT_SETTINGS.enableCategoryClassification).toBe(false);
   });
 
@@ -105,7 +103,6 @@ describe("MODEL_MIGRATIONS", () => {
 describe("Prompt constants", () => {
   it("all prompts are non-empty strings", () => {
     expect(DEFAULT_BASIC_MODE_PROMPT.length).toBeGreaterThan(0);
-    expect(DEFAULT_TEMPLATE_MODE_PROMPT.length).toBeGreaterThan(0);
     expect(DEFAULT_TRANSCRIPTION_ONLY_PROMPT.length).toBeGreaterThan(0);
     expect(DEFAULT_CATEGORY_PROMPT_1ON1.length).toBeGreaterThan(0);
     expect(DEFAULT_CATEGORY_PROMPT_TECH_MEETING.length).toBeGreaterThan(0);
