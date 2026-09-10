@@ -89,3 +89,16 @@
   - On cancel, the temp file (if any) is deleted and a "cancelled" event is published
 - Quota errors (`429` / `RESOURCE_EXHAUSTED`) are wrapped into `TranscriptionQuotaError` and surfaced to the user; the temp file is cleaned up
 - General API errors are caught, logged, and reported through the progress bus as an error event
+
+## Run History (progress panel)
+
+The progress panel's records outlive the run that produced them.
+
+- Each run is one *session*: the info rows, the status text, the chunk counter and the whole detail log, held as plain values rather than as DOM nodes (`_base/utils/sessionSnapshot.ts`)
+- Text is stored already formatted — `"12.4 MB"`, not `12_988_416`. A stored sentence survives any later change to the event that produced it, so only the structured fields (chunk counters, sparkline, status) can ever need migrating
+- Writes are debounced by one second and chained, with `success` / `error` / `cancelled` flushing at once; `onunload` is not awaited by Obsidian, so the terminal flush is what actually guarantees the record
+- `ProgressHistoryStore.hydrate()` reads the file **once per plugin load** and demotes anything still marked `running` to `interrupted` — that run did not survive the unload. Reopening the sidebar mid-run does not re-read the file, so a live session keeps receiving events
+- Chunk retry buttons come back disabled: `ChunkRerunSession` lives only in the controller's memory and holds the API key, so it is never written to disk
+- Retention is applied when a run starts, when the file is read, and when the settings change. The running session is always at index 0 and the limit never drops below one, so it cannot prune itself away
+- A file written by a newer plugin version is moved aside as `progress-sessions.v{n}.bak.json` rather than overwritten
+- The "Open progress panel" command calls the same `openProgressView()` the transcription flow uses, so reopening the panel goes through `restoreSessions()` and shows the stored history without starting a run

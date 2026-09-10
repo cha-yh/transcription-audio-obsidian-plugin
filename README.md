@@ -18,6 +18,8 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
   - Gemini usage logs (prompt/output/total tokens)
   - Cancel button to stop upload/API request in progress
   - Success/error result
+  - Records kept across plugin reloads and updates, each stamped with when the run started and removable individually
+  - "Open progress panel" command reopens the panel with those records, without starting a transcription
 - Writes the final output to the file and cursor position where you started the command
 
 ## Requirements
@@ -47,6 +49,9 @@ Open Settings → Transcription Audio:
 - Prompt: Customize the instruction for Prompt only mode and transcript summarization
 - Template prompt: Toggle in Prompt only mode to show Instructions and Output template fields for a consistent final markdown structure
 - Category classification: Available in Transcription mode. When disabled, Transcription mode uses the same Prompt/Template prompt settings as Prompt only mode.
+- Keep run history: Keeps the progress panel's records across plugin reloads and updates. Turning it off stops new records being saved; records already on disk are left alone and come back when you turn it on again.
+  - Auto-remove old records: Drops the oldest records once the panel passes the limit.
+  - Records to keep: How many runs stay in the panel (1-200, default 20). A run in progress is always kept.
 
 ## Usage
 
@@ -59,9 +64,13 @@ Open Settings → Transcription Audio:
    <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
 5. When complete, the transcription, summary, or transcript link is inserted at your starting cursor position.
 
+To bring the panel back later, run the command "Open progress panel". It reveals the panel in the right sidebar and restores the saved run history.
+
 ## Privacy & Data
 
 Audio content is sent to Google’s Gemini API for processing. The plugin does not store your audio or transcripts outside your vault. Keep your API key secure and review your organization’s data policies before use.
+
+Run history is written to `progress-sessions.json` inside the plugin's own folder, alongside its settings. It holds the progress log — file paths, model names and API error messages — but never your API key or transcript text. Switch off "Keep run history" if you would rather nothing were written. Opening the same vault in two windows at once can leave whichever window writes last as the one that wins.
 
 ## Changelog
 
