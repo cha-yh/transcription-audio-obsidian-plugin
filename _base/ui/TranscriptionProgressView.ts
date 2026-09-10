@@ -267,12 +267,32 @@ export class TranscriptionProgressView extends ItemView {
    * Prefers the display numbering, which counts only the chunks actually sent —
    * a skipped range should not make three requests read as "of 4".
    */
+  /**
+   * A run that was never cut up reads as one file, so the "1/1 -" numbering
+   * and the word "chunk" would both be noise. Short recordings go up whole and
+   * are retried whole; they are numbered as a single chunk only so the retry
+   * machinery has something to address.
+   */
+  private isSingleChunk(e: {
+    chunkTotal?: number;
+    displayTotal?: number;
+  }): boolean {
+    return (e.displayTotal ?? e.chunkTotal) === 1;
+  }
+
+  private rerunLabel(e: { chunkTotal?: number; displayTotal?: number }): string {
+    return this.isSingleChunk(e) ? "Re-run" : "Chunk re-run";
+  }
+
   private chunkPrefix(e: {
     chunkIndex?: number;
     chunkTotal?: number;
     displayIndex?: number;
     displayTotal?: number;
   }): string {
+    if (this.isSingleChunk(e)) {
+      return "";
+    }
     if (
       typeof e.displayIndex === "number" &&
       typeof e.displayTotal === "number"
@@ -1280,6 +1300,17 @@ export class TranscriptionProgressView extends ItemView {
         if (!this.currentSession) {
           break;
         }
+        if (this.isSingleChunk(e)) {
+          // No progress bar either: a bar that only ever reads 1/1 says less
+          // than the status line already does.
+          this.setStatus(this.currentSession, "Transcribing");
+          this.pushLog(
+            "Transcribing audio",
+            "Transcribing audio",
+            this.currentSession
+          );
+          break;
+        }
         this.currentSession.chunkTotal = this.chunkDenominator(e);
         this.currentSession.chunkIndex = e.displayIndex ?? e.chunkIndex;
         const rangeText = formatTimeRange(e.startMs, e.endMs);
@@ -1339,9 +1370,12 @@ export class TranscriptionProgressView extends ItemView {
         this.currentSession.failedChunks.add(e.chunkIndex);
         // The Retry button rides on the log line itself, so several failed
         // chunks each keep their own control.
+        const failureLabel = this.isSingleChunk(e)
+          ? "Transcription failed"
+          : `${this.chunkPrefix(e)}Chunk failed`;
         this.pushLog(
-          `${this.chunkPrefix(e)}Chunk failed`,
-          `${this.chunkPrefix(e)}Chunk failed: ${e.message}`,
+          failureLabel,
+          `${failureLabel}: ${e.message}`,
           this.currentSession,
           { retryChunkIndex: e.chunkIndex }
         );
@@ -1364,7 +1398,13 @@ export class TranscriptionProgressView extends ItemView {
         // them here instead of leaving the session looking mid-flight.
         this.setStatus(
           this.currentSession,
-          e.success ? "Chunk re-run done" : "Chunk re-run failed"
+          this.isSingleChunk(e)
+            ? e.success
+              ? "Re-run done"
+              : "Re-run failed"
+            : e.success
+            ? "Chunk re-run done"
+            : "Chunk re-run failed"
         );
         if (this.currentSession.chunkLabelText !== undefined) {
           this.setChunkProgress(
@@ -1384,15 +1424,17 @@ export class TranscriptionProgressView extends ItemView {
               ? ` (${e.previousLength} → ${e.newLength} chars)`
               : "";
           this.pushLog(
-            `${this.chunkPrefix(e)}Chunk re-run complete`,
-            `${this.chunkPrefix(e)}Chunk re-run complete${delta} — transcription file updated, summary not regenerated`,
+            `${this.chunkPrefix(e)}${this.rerunLabel(e)} complete`,
+            `${this.chunkPrefix(e)}${this.rerunLabel(
+              e
+            )} complete${delta} — transcription file updated, summary not regenerated`,
             this.currentSession,
             { retryChunkIndex: e.chunkIndex }
           );
         } else {
           this.pushLog(
-            `${this.chunkPrefix(e)}Chunk re-run failed`,
-            `${this.chunkPrefix(e)}Chunk re-run failed: ${
+            `${this.chunkPrefix(e)}${this.rerunLabel(e)} failed`,
+            `${this.chunkPrefix(e)}${this.rerunLabel(e)} failed: ${
               e.message ?? "unknown error"
             }`,
             this.currentSession,

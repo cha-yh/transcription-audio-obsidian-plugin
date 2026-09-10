@@ -114,6 +114,13 @@ type ChunkRerunSession = {
   apiKey: string;
   uploadedFiles: (UploadedFileInfo | null)[];
   inFlight: Set<number>;
+  /**
+   * Set when the run went up as one whole-file request. A re-run then has to
+   * send the original file again rather than cutting a range out of it: the
+   * range is the entire recording, and the file may not be decodable here at
+   * all - which is exactly how it ended up on this path.
+   */
+  wholeFile?: { mimeType: string };
 };
 
 /**
@@ -543,8 +550,25 @@ export class TranscriptionController {
               // minutes keeps it off the heap for that whole time.
               wavBuffer = null;
 
-              const transcriptionResult =
-                await this.transcriptionService.transcribe(
+              // Numbered as a single chunk so that everything downstream —
+              // the FAILED placeholder, the markers, the Retry button, the
+              // rerun session — works the same as it does for a cut-up file.
+              // Without this a short recording had no way to be retried: a
+              // failure ended the run and left nothing to retry from.
+              const wholeFileContext: ChunkUsageContext = {
+                chunkIndex: 1,
+                chunkTotal: 1,
+                displayIndex: 1,
+                displayTotal: 1,
+                retryable: true,
+              };
+              let wholeFileUpload: UploadedFileInfo | null = null;
+              let wholeFileError: string | null = null;
+
+              let wholeFileText = "";
+              try {
+                const transcriptionResult =
+                  await this.transcriptionService.transcribe(
                   apiKey!,
                   DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
                   {
@@ -558,6 +582,7 @@ export class TranscriptionController {
                     progressBus.publish({ stage: "file-upload-start" });
                   },
                   (uploadElapsedMs, uploadedFile) => {
+                    wholeFileUpload = uploadedFile;
                     progressBus.publish({
                       stage: "file-upload-complete",
                       elapsedMs: uploadElapsedMs,
@@ -586,8 +611,37 @@ export class TranscriptionController {
                   true
                 );
 
-              publishUsage(transcriptionResult);
-              rawTranscript = transcriptionResult.text;
+                if (transcriptionResult.uploadedFile) {
+                  wholeFileUpload = transcriptionResult.uploadedFile;
+                }
+                publishUsage(transcriptionResult, wholeFileContext);
+                wholeFileText = transcriptionResult.text.trim();
+                if (wholeFileText.length === 0) {
+                  wholeFileError = "Model returned an empty transcript.";
+                }
+              } catch (e) {
+                // Cancellation and quota still end the run: one has already
+                // been asked for, and the other cannot be retried usefully.
+                if (
+                  isTranscriptionCancelledError(e) ||
+                  isTranscriptionQuotaError(e)
+                ) {
+                  throw e;
+                }
+                wholeFileError = e instanceof Error ? e.message : String(e);
+              }
+
+              if (wholeFileError !== null) {
+                progressBus.publish({
+                  stage: "chunk-failed",
+                  ...wholeFileContext,
+                  message: wholeFileError,
+                });
+              }
+
+              // An empty transcript keeps the summary steps from running, the
+              // same way a run whose every chunk failed does.
+              rawTranscript = wholeFileError === null ? wholeFileText : "";
 
               const transcriptionStepElapsedMs = Math.round(
                 performance.now() - transcriptionStepStart
@@ -599,9 +653,16 @@ export class TranscriptionController {
 
               throwIfCancelled();
 
+              // Wrapped in chunk markers even though there is only one, so the
+              // region can be located and replaced by a later retry.
               const tempFilePath = await this.createTranscriptionTempFile(
                 filePath,
-                rawTranscript
+                wrapChunkBody(
+                  1,
+                  wholeFileError === null
+                    ? wholeFileText
+                    : `${CHUNK_FAILED_PREFIX}1${CHUNK_PLACEHOLDER_SUFFIX}`
+                )
               );
               transcriptionFilePath = await this.finalizeTranscriptionFile(
                 tempFilePath
@@ -610,6 +671,27 @@ export class TranscriptionController {
                 stage: "temp-file-created",
                 path: transcriptionFilePath,
               });
+
+              // Set after the rename for the same reason as the chunked path:
+              // the write queue binds to a path and would no-op against _temp.
+              this.rerunSession = {
+                audioPath: filePath,
+                transcriptPath: transcriptionFilePath,
+                chunks: [
+                  { startMs: 0, endMs: totalMs ?? 0, skipped: false },
+                ],
+                model,
+                apiKey: apiKey!,
+                uploadedFiles: [wholeFileUpload],
+                inFlight: new Set<number>(),
+                wholeFile: { mimeType },
+              };
+
+              if (wholeFileError !== null) {
+                new Notice(
+                  "Transcription failed. Retry it from the transcription progress panel."
+                );
+              }
             } else {
               const chunks = chunkPlan;
 
@@ -840,7 +922,19 @@ export class TranscriptionController {
             transcript
           );
 
-          progressBus.publish({ stage: "success" });
+          // A run whose transcription produced nothing is not a success, even
+          // though the transcript file and its link were still written. Also
+          // covers reusing an existing transcript that holds only failed
+          // placeholders, which is why the message claims no retry affordance.
+          if (transcriptForModel.trim().length === 0) {
+            progressBus.publish({
+              stage: "error",
+              message:
+                "No transcript was produced, so summarization was skipped.",
+            });
+          } else {
+            progressBus.publish({ stage: "success" });
+          }
         } catch (e) {
           if (isTranscriptionCancelledError(e)) {
             await cleanupTempFile();
@@ -1541,6 +1635,18 @@ export class TranscriptionController {
     );
   }
 
+  /** The original audio, untouched — no decoding, no slicing. */
+  private async readAudioBlob(
+    audioPath: string,
+    mimeType: string
+  ): Promise<Blob> {
+    const file = this.app.vault.getAbstractFileByPath(audioPath);
+    if (!(file instanceof TFile)) {
+      throw new Error(`Audio file not found: ${audioPath}`);
+    }
+    return toBlob(await this.app.vault.readBinary(file), mimeType);
+  }
+
   /**
    * Re-transcribes a chunk that already produced text, replacing just that
    * chunk's marked region in the transcription file. Triggered by the Retry
@@ -1625,8 +1731,17 @@ export class TranscriptionController {
         ? { kind: "cached", file: cached! }
         : {
             kind: "upload",
-            blob: await this.buildChunkBlob(session.audioPath, range),
-            mimeType: "audio/wav",
+            // A run that went up whole is re-sent whole. Cutting a range would
+            // need the decoder, which this path may not have had to begin with.
+            blob: session.wholeFile
+              ? await this.readAudioBlob(
+                  session.audioPath,
+                  session.wholeFile.mimeType
+                )
+              : await this.buildChunkBlob(session.audioPath, range),
+            mimeType: session.wholeFile
+              ? session.wholeFile.mimeType
+              : "audio/wav",
           };
 
       const result = await this.transcriptionService.transcribe(

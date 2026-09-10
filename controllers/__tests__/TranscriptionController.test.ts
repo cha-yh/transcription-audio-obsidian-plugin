@@ -418,6 +418,96 @@ describe("TranscriptionController — pure helpers", () => {
     });
   });
 
+
+  describe("rerunChunk for a run that was sent whole", () => {
+    function setupWholeFileRerun(transcribe: ReturnType<typeof vi.fn>) {
+      const app = createMockApp();
+      const ctrl = new TranscriptionController(app, "test-progress-view");
+
+      const transcriptFile = Object.assign(Object.create(MockTFile.prototype), {
+        path: "Recordings/memo.md",
+      });
+      const audioFile = Object.assign(Object.create(MockTFile.prototype), {
+        path: "Recordings/memo.m4a",
+      });
+      app.vault.getAbstractFileByPath.mockImplementation((path: string) =>
+        path === "Recordings/memo.md" ? transcriptFile : audioFile
+      );
+      app.vault.read.mockResolvedValue(
+        "%%chunk:1%%\n{{CHUNK_FAILED:1}}\n%%/chunk:1%%"
+      );
+      app.vault.readBinary.mockResolvedValue(new ArrayBuffer(64));
+      let written = "";
+      app.vault.process.mockImplementation(
+        async (_file: any, fn: (data: string) => string) => {
+          written = fn("%%chunk:1%%\n{{CHUNK_FAILED:1}}\n%%/chunk:1%%");
+        }
+      );
+
+      (ctrl as any).transcriptionService.transcribe = transcribe;
+      (ctrl as any).rerunSession = {
+        audioPath: "Recordings/memo.m4a",
+        transcriptPath: "Recordings/memo.md",
+        chunks: [{ startMs: 0, endMs: 42_000, skipped: false }],
+        model: "gemini-3.7-flash",
+        apiKey: "test-key",
+        uploadedFiles: [null],
+        inFlight: new Set<number>(),
+        wholeFile: { mimeType: "audio/mp4" },
+      };
+
+      return { ctrl, app, written: () => written };
+    }
+
+    it("re-sends the original file instead of cutting a range out of it", async () => {
+      // A short recording never went through the decoder, so buildChunkBlob
+      // would have nothing to slice - and on mobile could not run at all.
+      const transcribe = vi
+        .fn()
+        .mockResolvedValue({ text: "recovered transcript", usage: {} });
+      const { ctrl, app } = setupWholeFileRerun(transcribe);
+
+      await (ctrl as any).rerunChunk(1);
+
+      expect(app.vault.readBinary).toHaveBeenCalled();
+      const audio = transcribe.mock.calls[0][2];
+      expect(audio.kind).toBe("upload");
+      expect(audio.mimeType).toBe("audio/mp4");
+      expect((ctrl as any).audioService.decodeToWavPcm16).not.toHaveBeenCalled();
+    });
+
+    it("replaces the failed placeholder with the new transcript", async () => {
+      const transcribe = vi
+        .fn()
+        .mockResolvedValue({ text: "recovered transcript", usage: {} });
+      const { ctrl, written } = setupWholeFileRerun(transcribe);
+
+      await (ctrl as any).rerunChunk(1);
+
+      expect(written()).toContain("recovered transcript");
+      expect(written()).not.toContain("CHUNK_FAILED");
+    });
+
+    it("reuses a still-valid upload rather than reading the file again", async () => {
+      const transcribe = vi
+        .fn()
+        .mockResolvedValue({ text: "again", usage: {} });
+      const { ctrl, app } = setupWholeFileRerun(transcribe);
+      (ctrl as any).rerunSession.uploadedFiles = [
+        {
+          uri: "gs://bucket/memo",
+          mimeType: "audio/mp4",
+          expirationTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        },
+      ];
+
+      await (ctrl as any).rerunChunk(1);
+
+      expect(app.vault.readBinary).not.toHaveBeenCalled();
+      expect(transcribe.mock.calls[0][2].kind).toBe("cached");
+    });
+  });
+
   describe("finalizeTranscriptionFile", () => {
     it("removes _temp from filename", async () => {
       const app = createMockApp();
