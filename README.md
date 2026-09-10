@@ -40,7 +40,7 @@ Open Settings → Transcription Audio:
 - API Key: Configure the Gemini API key to use. The deprecated plain-text API key input has been removed.
 - On older Obsidian versions, API key storage is disabled and you will see an update-required message (Obsidian 1.11.4+)
 - Summarize transcript (default: on): transcription is always created; turn this off to create and link only the raw transcript.
-- Model: Select a Gemini-compatible model (`gemini-3.7-flash`(default), `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`)
+- Model: Select a Gemini-compatible model (`gemini-3.8-flash`(default), `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
 - Default prompt: Customize the instruction used to summarize transcripts and as the fallback when a category does not match.
 - Category classification: When enabled, the matching category prompt is used. The `General` category is not included; unmatched transcripts use the default prompt.

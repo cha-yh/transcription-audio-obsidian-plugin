@@ -128,7 +128,7 @@ export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
 
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
   summarizeTranscript: true,
-  model: "gemini-3.7-flash",
+  model: "gemini-3.8-flash",
   secretApiKeyName: "",
   prompt: DEFAULT_BASIC_MODE_PROMPT,
   enableCategoryClassification: false,
@@ -139,6 +139,7 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
 };
 
 export const MODELS: string[] = [
+  "gemini-3.8-flash",
   "gemini-3.7-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash",
