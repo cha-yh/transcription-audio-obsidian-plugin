@@ -69,38 +69,42 @@ Run history is written to `progress-sessions.json` inside the plugin's own folde
 
 ## Changelog
 
-### Version 0.7.1
+### Version 0.8.0
+
+- **Runs on iOS and Android**
+  - Transcription used to fail on every attempt in the mobile app; the upload path relied on a Node global the WebView does not have
+  - Peak memory on long recordings drops by roughly 40%, and chunks are capped at four in flight
+  - A bundle scanner fails the build when a desktop-only global reaches it, and CI now runs the suite on every push
+- **Transcription modes collapse into one toggle**
+  - Three modes become a single `Summarize transcript` toggle (on by default): a transcript file is always produced, and only summarization is optional
+  - Template prompt settings are gone — the UI and every reader had already been removed
+  - The synthetic `General` category is retired; an unmatched classification falls back to the default prompt, and a customized `General` prompt is carried into it
+  - PCM16 WAV input now takes the same path as everything else, gaining a transcript file, four-way concurrency, incremental writes, and per-chunk retry
+  - An unreadable WAV header or an empty chunk plan falls back to a whole-file upload instead of failing the run
+  - A file named `Meeting: Q3.m4a` no longer leaves the note's frontmatter unparseable
+- **The progress panel keeps its records**
+  - Records survive plugin reloads and updates, each stamped with when the run started and removable individually
+  - New `Open progress panel` command reopens the panel with those records without starting a transcription
+  - Settings: `Keep run history` (on) → `Auto-remove old records` (on) → `Records to keep` (20, range 1–200)
+  - A run interrupted by a reload is shown as `Interrupted`; reopening the sidebar mid-run now keeps the live run instead of showing an empty panel
+- **Model updates**
+  - Added `gemini-3.8-flash`, now the default, listed ahead of `gemini-3.7-flash`
+- **Fixes**
+  - A recording short enough to be sent whole can now be retried when it fails — it used to end the run with no Retry button, which is the one case the button exists for
+  - A run that produced no transcript is reported as failed rather than as a success
+  - Skipping summarization when every chunk failed, instead of billing two requests to summarize nothing
+
+### Version 0.7.1 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.7.1)
 
 - **Failed chunks no longer discard the run**
-  - A chunk that fails stays in the transcription file as a placeholder and the run finalizes normally, so every chunk that already succeeded survives
-  - Retry has no deadline — the Retry button on the chunk's log line re-runs it whenever you get to it, including while summarization is still running
-  - Fixed a second failed chunk becoming impossible to retry once the first one had succeeded
-- **Model updates**
-  - Added `gemini-3.7-flash` (the new default), `gemini-3.6-flash`, and `gemini-3.5-flash-lite`, listed newest first
-  - Removed `gemini-2.5-flash` and `gemini-2.5-pro`; a setting still pointing at either falls back to the default
-- **Fixes**
-  - Progress counts only the chunks actually sent, so a skipped range no longer inflates the numbering
-  - Skipped ranges no longer show their `[No speech detected ...]` note in reading view
+- **Model updates**: added `gemini-3.7-flash` (then the default), `gemini-3.6-flash`, and `gemini-3.5-flash-lite`
+- **Fixes**: skipped ranges no longer inflate the chunk numbering or show their note in reading view
 
-### Version 0.7.0
+### Version 0.7.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.7.0)
 
-<img width="425" height="234" alt="Speech activity sparkline with chunk boundaries and a skipped range" src="https://github.com/user-attachments/assets/5a72875c-ffd3-4b6c-9ce0-dbf1449ed264" />
-
-- **Speech-aware chunking**
-  - Detects where speech actually occurs and plans chunks around it, so silent stretches are never sent to the model
-  - Long silences split the recording into speech islands chunked independently, keeping a late remark after a long gap without dragging the gap along
-  - Skipped ranges are recorded in the transcription file and can be transcribed later
-- **Per-chunk retry**
-  - Each chunk's log line gains a Retry button that re-runs only that chunk and rewrites only its region, leaving manual edits to other chunks intact
-  - Reuses the uploaded file when it is still valid, so most retries skip the upload entirely
-- **Progress log**
-  - Added a sparkline showing speech activity, chunk boundaries, skipped ranges, and a per-chunk timeline
-  - Log lines are prefixed with the chunk number and carry the chunk's time range, so parallel chunks can be told apart
-- **Fixes**
-  - Trailing chunks shorter than two minutes now fold into the previous chunk instead of costing a request that returns nothing
-  - Fixed a `removeChild` error when the progress view was open while the plugin was disabled
-  - Disabling the plugin no longer discards the progress view's sidebar placement
-  - Transcript text containing `$&` or `` $` `` is no longer mangled when written to the transcription file
+- **Speech-aware chunking**: plans chunks around where people actually talk, so silent stretches are never sent to the model
+- **Per-chunk retry**: each chunk's log line gains a Retry button that rewrites only that chunk's region
+- **Progress log**: added a speech-activity sparkline, chunk boundaries, skipped ranges, and a per-chunk timeline
 
 ### Version 0.6.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.6.0)
 
