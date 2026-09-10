@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   clampHistoryLimit,
   isRemovableStatus,
+  staleRetries,
   createInitialSession,
   createSessionId,
   demoteRunning,
@@ -76,7 +77,7 @@ describe("toSnapshot", () => {
     expect(snapshot.failedChunks).toEqual([1, 2, 3]);
   });
 
-  it("drops runtime-only retry flags", () => {
+  it("keeps staleness but drops the in-flight retry flag", () => {
     const snapshot = toSnapshot(
       runtimeState({
         logHistory: [
@@ -90,9 +91,12 @@ describe("toSnapshot", () => {
         pendingRetryChunks: new Set([1]),
       })
     );
+    // retryStale has to survive: it says the button is dead. retryRunning is
+    // in-flight state that cannot outlive the process that set it.
     expect(snapshot.logHistory[0]).toEqual({
       text: "1/2 - Chunk failed",
       retryChunkIndex: 1,
+      retryStale: true,
       sparkline: undefined,
     });
     expect(snapshot).not.toHaveProperty("pendingRetryChunks");
@@ -121,18 +125,18 @@ describe("toSnapshot", () => {
 });
 
 describe("fromSnapshot", () => {
-  it("restores every retry button as stale", () => {
+  it("keeps the staleness that was stored instead of forcing it", () => {
+    // Reopening the sidebar mid-run goes through here while the controller
+    // still holds the rerun context, so a live Retry button has to stay live.
     const state = fromSnapshot({
       ...(progressHistoryV1.sessions[0] as PersistedSession),
+      rerunDisabled: false,
+      logHistory: [{ text: "1/2 - Chunk failed", retryChunkIndex: 1 }],
     });
-    const retryEntries = state.logHistory.filter(
-      (entry) => entry.retryChunkIndex !== undefined
-    );
-    expect(retryEntries.length).toBeGreaterThan(0);
-    expect(retryEntries.every((entry) => entry.retryStale)).toBe(true);
-    expect(retryEntries.every((entry) => entry.retryRunning === false)).toBe(
-      true
-    );
+
+    expect(state.rerunDisabled).toBe(false);
+    expect(state.logHistory[0].retryStale).toBeUndefined();
+    expect(state.logHistory[0].retryRunning).toBe(false);
   });
 
   it("rebuilds the Sets", () => {
@@ -141,6 +145,36 @@ describe("fromSnapshot", () => {
     );
     expect(state.failedChunks.has(1)).toBe(true);
     expect(state.pendingRetryChunks.size).toBe(0);
+  });
+});
+
+describe("staleRetries", () => {
+  it("kills every re-run affordance on a record", () => {
+    const [session] = staleRetries([
+      {
+        ...(progressHistoryV1.sessions[0] as PersistedSession),
+        rerunDisabled: false,
+      },
+    ]);
+
+    expect(session.rerunDisabled).toBe(true);
+    expect(
+      session.logHistory
+        .filter((entry) => entry.retryChunkIndex !== undefined)
+        .every((entry) => entry.retryStale)
+    ).toBe(true);
+  });
+
+  it("leaves lines that never had a retry button untouched", () => {
+    const plain = { text: "File detected: a.m4a" };
+    const [session] = staleRetries([
+      {
+        ...(progressHistoryV1.sessions[1] as PersistedSession),
+        logHistory: [plain],
+      },
+    ]);
+
+    expect(session.logHistory[0]).toBe(plain);
   });
 });
 
@@ -189,6 +223,11 @@ describe("parseSessionHistory", () => {
       ],
     });
     expect(sessions[0].logHistory).toEqual([{ text: "kept" }]);
+  });
+
+  it("treats a record with no rerun flag as no longer re-runnable", () => {
+    const { sessions } = parseSessionHistory(progressHistoryV1);
+    expect(sessions[0].rerunDisabled).toBe(true);
   });
 
   it("degrades an unknown status to interrupted instead of dropping the run", () => {
@@ -254,7 +293,6 @@ describe("resolveHistoryLimit", () => {
   it("is undefined when auto-removal is off", () => {
     expect(
       resolveHistoryLimit({
-        enableSessionHistory: true,
         autoPruneSessionHistory: false,
         sessionHistoryLimit: 20,
       })
@@ -264,7 +302,6 @@ describe("resolveHistoryLimit", () => {
   it("floors at one so the running session is protected", () => {
     expect(
       resolveHistoryLimit({
-        enableSessionHistory: true,
         autoPruneSessionHistory: true,
         sessionHistoryLimit: 0,
       })

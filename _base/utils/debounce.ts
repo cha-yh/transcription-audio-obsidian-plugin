@@ -8,8 +8,6 @@
 export interface DebouncedRunner {
   /** Run once, `delayMs` after the last call. */
   schedule(): void;
-  /** Run now if anything is pending, dropping the timer. */
-  flush(): void;
   /** Forget what is pending without running it. */
   cancel(): void;
 }
@@ -34,11 +32,6 @@ export function createDebouncedRunner(
         timer = null;
         run();
       }, delayMs);
-    },
-    flush(): void {
-      if (timer === null) return;
-      clear();
-      run();
     },
     cancel(): void {
       clear();

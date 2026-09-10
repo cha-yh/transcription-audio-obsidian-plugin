@@ -198,6 +198,7 @@ export function toSnapshot(state: SessionRuntimeState): PersistedSession {
     targetCh: state.targetCh,
     isCancellable: state.isCancellable,
     isLogExpanded: state.isLogExpanded,
+    rerunDisabled: state.rerunDisabled,
     chunk:
       state.chunkLabelText === undefined
         ? undefined
@@ -213,6 +214,7 @@ export function toSnapshot(state: SessionRuntimeState): PersistedSession {
       state.logHistory.map((entry) => ({
         text: entry.text,
         retryChunkIndex: entry.retryChunkIndex,
+        retryStale: entry.retryStale,
         sparkline: entry.sparkline
           ? snapshotSparkline(entry.sparkline)
           : undefined,
@@ -224,9 +226,12 @@ export function toSnapshot(state: SessionRuntimeState): PersistedSession {
 }
 
 /**
- * Disk record back to runtime state. Every retry button comes back disabled:
- * the context needed to re-run a chunk lives only in the controller's memory,
- * so a button restored as live would publish an event nothing can serve.
+ * Disk record back to runtime state, staleness included as stored.
+ *
+ * Deliberately not forcing every retry button dead here: this also runs when
+ * the sidebar is reopened while the plugin is still loaded, and that run's
+ * rerun context is still in the controller. Killing the buttons belongs to
+ * `staleRetries`, which the store applies at the reload boundary.
  */
 export function fromSnapshot(snapshot: PersistedSession): SessionRuntimeState {
   const { chunk, ...rest } = snapshot;
@@ -234,7 +239,6 @@ export function fromSnapshot(snapshot: PersistedSession): SessionRuntimeState {
     ...rest,
     logHistory: snapshot.logHistory.map((entry) => ({
       ...entry,
-      retryStale: true,
       retryRunning: false,
     })),
     failedChunks: new Set(snapshot.failedChunks),
@@ -282,6 +286,7 @@ function parseLogEntry(value: unknown): PersistedLogEntry | null {
   return {
     text: value.text,
     retryChunkIndex: asOptionalNumber(value.retryChunkIndex),
+    retryStale: typeof value.retryStale === "boolean" ? value.retryStale : undefined,
     sparkline: parseSparkline(value.sparkline),
   };
 }
@@ -337,6 +342,7 @@ function parseSession(value: unknown): PersistedSession | null {
     targetCh: asOptionalNumber(value.targetCh),
     isCancellable: asBoolean(value.isCancellable, false),
     isLogExpanded: asBoolean(value.isLogExpanded, false),
+    rerunDisabled: asBoolean(value.rerunDisabled, true),
     chunk: parseChunk(value.chunk),
     logHistory,
     failedChunks,
@@ -402,6 +408,24 @@ export function demoteRunning(sessions: PersistedSession[]): PersistedSession[] 
 }
 
 /**
+ * Kills every re-run affordance on a record. The context a chunk re-run needs
+ * lives only in the controller's memory and holds the API key, so it never
+ * survives a reload: a button restored as live would publish an event that
+ * another run's context would serve, rewriting the wrong transcript.
+ */
+export function staleRetries(sessions: PersistedSession[]): PersistedSession[] {
+  return sessions.map((session) => ({
+    ...session,
+    rerunDisabled: true,
+    logHistory: session.logHistory.map((entry) =>
+      entry.retryChunkIndex === undefined
+        ? entry
+        : { ...entry, retryStale: true }
+    ),
+  }));
+}
+
+/**
  * Newest-first list capped at `limit`. `undefined` keeps everything, which is
  * what auto-removal being switched off means.
  */
@@ -414,11 +438,13 @@ export function pruneSessions<T>(
 }
 
 /**
- * The effective cap from the three settings. A live run always occupies slot
- * 0, so a floor of 1 is what keeps it from pruning itself away.
+ * The effective cap. A live run always occupies slot 0, so the floor of 1 is
+ * what keeps it from pruning itself away.
+ *
+ * Independent of whether history is kept: switching that off stops writing,
+ * it does not stop the panel from tidying up after itself.
  */
 export function resolveHistoryLimit(settings: {
-  enableSessionHistory: boolean;
   autoPruneSessionHistory: boolean;
   sessionHistoryLimit: number;
 }): number | undefined {

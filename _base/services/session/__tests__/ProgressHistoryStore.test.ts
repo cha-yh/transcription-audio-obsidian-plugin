@@ -85,7 +85,7 @@ describe("hydrate", () => {
     const store = new ProgressHistoryStore(port, { enabled: true, limit: 20 });
 
     await store.hydrate();
-    expect(port.backup).toHaveBeenCalledWith(99);
+    expect(port.backup).toHaveBeenCalledWith("v99");
     expect(store.list()).toEqual([]);
   });
 
@@ -284,6 +284,103 @@ describe("saving", () => {
     ]);
   });
 
+  it("kills every re-run affordance on the records it restores", async () => {
+    const live = {
+      ...finished("a", 1),
+      status: "running" as const,
+      rerunDisabled: false,
+      logHistory: [{ text: "1/2 - Chunk failed", retryChunkIndex: 1 }],
+    };
+    const store = new ProgressHistoryStore(
+      createPort(JSON.stringify({ version: 1, sessions: [live] })),
+      { enabled: true, limit: 20 }
+    );
+
+    await store.hydrate();
+    expect(store.list()[0].rerunDisabled).toBe(true);
+    expect(store.list()[0].logHistory[0].retryStale).toBe(true);
+  });
+
+  it("backs up a file it cannot parse rather than overwriting it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const port = createPort("{ not json");
+    const store = new ProgressHistoryStore(port, { enabled: true, limit: 20 });
+
+    await store.hydrate();
+    expect(port.backup).toHaveBeenCalledWith("unreadable");
+  });
+
+  it("backs up a file whose records all fail to parse", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const port = createPort(
+      JSON.stringify({ version: 1, sessions: [{ nonsense: true }] })
+    );
+    const store = new ProgressHistoryStore(port, { enabled: true, limit: 20 });
+
+    await store.hydrate();
+    expect(port.backup).toHaveBeenCalledWith("unreadable");
+  });
+
+  it("ignores a clearSource from a panel that no longer owns the source", async () => {
+    const port = createPort();
+    const store = new ProgressHistoryStore(port, { enabled: true, limit: 20 });
+
+    const closing = () => [finished("old", 1)];
+    store.setSource(closing);
+    const opening = () => [finished("new", 2)];
+    store.setSource(opening);
+
+    // The closing panel detaches after the new one attached; it must not
+    // detach the source the surviving panel installed.
+    store.clearSource(closing);
+    await store.flush();
+
+    const written = JSON.parse(port.write.mock.calls[0][0] as string);
+    expect(written.sessions[0].id).toBe("new");
+  });
+
+  it("keeps what it wrote, so list() matches the file", async () => {
+    const port = createPort();
+    const store = new ProgressHistoryStore(port, { enabled: true, limit: 2 });
+    store.setSource(() => [
+      finished("c", 3),
+      finished("b", 2),
+      finished("a", 1),
+    ]);
+
+    await store.flush();
+    expect(store.list().map((s) => s.id)).toEqual(["c", "b"]);
+  });
+
+  it("measures the byte cap in UTF-8, not string length", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const port = createPort();
+    const store = new ProgressHistoryStore(port, {
+      enabled: true,
+      limit: undefined,
+    });
+
+    // Each character is 3 UTF-8 bytes. One session fits, two do not - but by
+    // string length both would, which is exactly the miscount being guarded.
+    const korean = (id: string, startedAtMs: number): PersistedSession => ({
+      ...finished(id, startedAtMs),
+      logHistory: Array.from({ length: 300 }, () => ({
+        text: "가".repeat(1300),
+      })),
+    });
+    store.setSource(() => [korean("new", 2), korean("old", 1)]);
+
+    await store.flush();
+    const data = port.write.mock.calls[0][0] as string;
+    expect(data.length).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(new TextEncoder().encode(data).length).toBeLessThanOrEqual(
+      2 * 1024 * 1024
+    );
+    expect(JSON.parse(data).sessions.map((s: PersistedSession) => s.id)).toEqual(
+      ["new"]
+    );
+  });
+
   it("reads the file again when history is switched back on", async () => {
     const port = createPort(JSON.stringify(progressHistoryV1));
     const store = new ProgressHistoryStore(port, {
@@ -307,9 +404,10 @@ describe("saving", () => {
       enabled: true,
       limit: 20,
     });
-    store.setSource(() => [finished("a", 1)]);
+    const source = () => [finished("a", 1)];
+    store.setSource(source);
 
-    store.clearSource();
+    store.clearSource(source);
     await store.flush();
 
     const written = JSON.parse(port.write.mock.calls[0][0] as string);

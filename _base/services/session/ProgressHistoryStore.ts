@@ -12,6 +12,7 @@ import {
   demoteRunning,
   parseSessionHistory,
   pruneSessions,
+  staleRetries,
 } from "_base/utils/sessionSnapshot";
 
 /**
@@ -23,14 +24,23 @@ export interface SessionHistoryPort {
   /** Null when no history file exists yet. */
   read(): Promise<string | null>;
   write(data: string): Promise<void>;
-  /** Move the existing file aside under a version-tagged name. */
-  backup(version: number): Promise<void>;
+  /** Move the existing file aside under `<name>.<label>.bak.json`. */
+  backup(label: string): Promise<void>;
 }
 
 export interface SessionHistoryOptions {
   enabled: boolean;
   /** Undefined keeps every record — auto-removal switched off. */
   limit: number | undefined;
+}
+
+/**
+ * UTF-8 size, not string length: a Korean path or error message is three bytes
+ * per character, so comparing `length` against a byte budget would let the
+ * file grow to roughly three times the cap.
+ */
+function byteLength(data: string): number {
+  return new TextEncoder().encode(data).length;
 }
 
 /**
@@ -86,6 +96,9 @@ export class ProgressHistoryStore {
       parsed = JSON.parse(raw);
     } catch (e) {
       console.error("[sessionHistory] history file is not valid JSON", e);
+      // Starting empty means the next write replaces this file, so keep a
+      // copy first: unreadable here is not unrecoverable by hand.
+      await this.backupAside("unreadable");
       return;
     }
 
@@ -93,15 +106,37 @@ export class ProgressHistoryStore {
     if (futureVersion !== undefined) {
       // Written by a newer plugin. Overwriting it would destroy records this
       // version cannot read, so set it aside and start empty instead.
-      try {
-        await this.port.backup(futureVersion);
-      } catch (e) {
-        console.error("[sessionHistory] could not back up newer history", e);
-      }
+      await this.backupAside(`v${futureVersion}`);
+      return;
+    }
+    if (sessions.length === 0 && this.hasStoredSessions(parsed)) {
+      // The file held records but none of them survived parsing — a schema too
+      // old to migrate, or damage. Same reasoning as above.
+      await this.backupAside("unreadable");
       return;
     }
 
-    this.sessions = pruneSessions(demoteRunning(sessions), this.limit);
+    this.sessions = pruneSessions(
+      staleRetries(demoteRunning(sessions)),
+      this.limit
+    );
+  }
+
+  private hasStoredSessions(parsed: unknown): boolean {
+    return (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      Array.isArray((parsed as { sessions?: unknown }).sessions) &&
+      (parsed as { sessions: unknown[] }).sessions.length > 0
+    );
+  }
+
+  private async backupAside(label: string): Promise<void> {
+    try {
+      await this.port.backup(label);
+    } catch (e) {
+      console.error("[sessionHistory] could not back up history", e);
+    }
   }
 
   /** Restored records, newest first. */
@@ -117,12 +152,18 @@ export class ProgressHistoryStore {
     this.source = source;
   }
 
-  /** Keeps the last known list so closing the view does not blank the file. */
-  clearSource(): void {
-    if (this.source) {
-      this.sessions = this.source();
-      this.source = null;
-    }
+  /**
+   * Keeps the last known list so closing the view does not blank the file.
+   *
+   * Takes the source back so a closing panel cannot detach a different one:
+   * with two panel leaves open, Obsidian creates the new view before tearing
+   * the old one down, and an unconditional clear would freeze the surviving
+   * panel's history at that moment.
+   */
+  clearSource(source: () => PersistedSession[]): void {
+    if (this.source !== source) return;
+    this.sessions = this.source();
+    this.source = null;
   }
 
   setOptions(options: SessionHistoryOptions): void {
@@ -162,8 +203,11 @@ export class ProgressHistoryStore {
   private persist(): Promise<void> {
     if (!this.enabled) return Promise.resolve();
 
-    this.sessions = this.source ? this.source() : this.sessions;
-    const data = this.serialize(this.sessions);
+    const collected = this.source ? this.source() : this.sessions;
+    const { kept, data } = this.serialize(collected);
+    // What was written is what the store holds; otherwise list() hands the
+    // panel records that are not in the file and vanish on the next reload.
+    this.sessions = kept;
 
     this.writeChain = this.writeChain
       .then(() => this.port.write(data))
@@ -179,18 +223,32 @@ export class ProgressHistoryStore {
    * The byte cap is a backstop for auto-removal being switched off; a single
    * session is never dropped, however large it is.
    */
-  private serialize(sessions: PersistedSession[]): string {
-    let kept = pruneSessions(sessions, this.limit);
-    let data = JSON.stringify(createHistoryDoc(kept));
-    if (data.length <= MAX_HISTORY_BYTES) return data;
+  private serialize(sessions: PersistedSession[]): {
+    kept: PersistedSession[];
+    data: string;
+  } {
+    const limited = pruneSessions(sessions, this.limit);
+    let data = JSON.stringify(createHistoryDoc(limited));
+    if (byteLength(data) <= MAX_HISTORY_BYTES) return { kept: limited, data };
 
-    while (kept.length > 1 && data.length > MAX_HISTORY_BYTES) {
-      kept = kept.slice(0, kept.length - 1);
-      data = JSON.stringify(createHistoryDoc(kept));
+    // Measured per session rather than by re-serializing the whole document
+    // once per dropped record, which is quadratic in the overflow.
+    const overhead = byteLength(JSON.stringify(createHistoryDoc([])));
+    let used = overhead;
+    let fits = 0;
+    for (const session of limited) {
+      // +1 for the comma the array separator adds after the first entry.
+      const cost = byteLength(JSON.stringify(session)) + (fits > 0 ? 1 : 0);
+      if (fits > 0 && used + cost > MAX_HISTORY_BYTES) break;
+      used += cost;
+      fits++;
     }
+
+    const kept = limited.slice(0, Math.max(1, fits));
+    data = JSON.stringify(createHistoryDoc(kept));
     console.warn(
       `[sessionHistory] history exceeded ${MAX_HISTORY_BYTES} bytes; kept the newest ${kept.length}`
     );
-    return data;
+    return { kept, data };
   }
 }

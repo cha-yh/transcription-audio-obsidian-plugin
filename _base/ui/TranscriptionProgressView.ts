@@ -55,9 +55,9 @@ interface LogEntry extends RuntimeLogEntry {
  */
 interface SessionRefs {
   sessionEl: HTMLElement;
-  headerEl: HTMLElement;
-  dateEl: HTMLElement;
   closeButtonEl: HTMLButtonElement;
+  /** Chunk re-run buttons under the sparkline, refreshed when they go stale. */
+  chunkRerunButtonEls: HTMLButtonElement[];
   fileNameEl: HTMLAnchorElement;
   fileSizeEl: HTMLElement;
   statusEl: HTMLElement;
@@ -226,11 +226,12 @@ export class TranscriptionProgressView extends ItemView {
     // Subscribed before restoring: the controller opens this view as it starts
     // a run, so a later subscription would miss that run's file-detected.
     this.register(progressBus.subscribe((e) => this.onProgress(e)));
+    const source = () => this.sessions.map(toSnapshot);
     this.register(() => {
       void this.store.flush();
-      this.store.clearSource();
+      this.store.clearSource(source);
     });
-    this.store.setSource(() => this.sessions.map(toSnapshot));
+    this.store.setSource(source);
 
     this.restoreSessions();
   }
@@ -573,7 +574,13 @@ export class TranscriptionProgressView extends ItemView {
         cls: "transcription-audio-log-retry-button",
       });
       const chunkIndex = chunk.chunkIndex;
+      session.chunkRerunButtonEls.push(button);
+      // Dead once the controller has moved on: the rerun context it would
+      // drive belongs to whichever run is current, so a click here would
+      // rewrite that run's transcript instead of this one's.
+      button.disabled = Boolean(session.rerunDisabled);
       button.addEventListener("click", () => {
+        if (session.rerunDisabled) return;
         button.disabled = true;
         button.setText("Transcribing...");
         session.pendingRetryChunks.add(chunkIndex);
@@ -583,7 +590,19 @@ export class TranscriptionProgressView extends ItemView {
   }
 
   /** Re-applies disabled/label state to buttons already in the DOM. */
+  /** Marks a run as no longer re-runnable and updates every button it owns. */
+  private disableReruns(session: TranscriptionSession): void {
+    session.rerunDisabled = true;
+    for (const entry of session.logHistory) {
+      if (entry.retryChunkIndex !== undefined) entry.retryStale = true;
+    }
+    this.refreshRetryButtons(session);
+  }
+
   private refreshRetryButtons(session: TranscriptionSession): void {
+    for (const button of session.chunkRerunButtonEls) {
+      if (session.rerunDisabled) button.disabled = true;
+    }
     for (const entry of session.logHistory) {
       const button = entry.retryButtonEl;
       if (!button) continue;
@@ -618,7 +637,7 @@ export class TranscriptionProgressView extends ItemView {
     const headerEl = sessionEl.createEl("div", {
       cls: "transcription-audio-session-header",
     });
-    const dateEl = headerEl.createEl("span", {
+    headerEl.createEl("span", {
       text: formatLocaleDateTime(new Date(state.startedAtMs)),
       cls: "transcription-audio-session-date",
     });
@@ -742,9 +761,8 @@ export class TranscriptionProgressView extends ItemView {
 
     const session = Object.assign(state, {
       sessionEl,
-      headerEl,
-      dateEl,
       closeButtonEl,
+      chunkRerunButtonEls: [],
       fileNameEl,
       fileSizeEl,
       statusEl,
@@ -838,17 +856,13 @@ export class TranscriptionProgressView extends ItemView {
     if (this.currentSession) {
       // The controller keeps retry context for the most recent run only, so
       // buttons from the previous session would target the wrong file.
-      for (const entry of this.currentSession.logHistory) {
-        if (entry.retryChunkIndex !== undefined) {
-          entry.retryStale = true;
-        }
-      }
-      this.refreshRetryButtons(this.currentSession);
+      this.disableReruns(this.currentSession);
     }
 
-    const session = this.renderSession(
-      fromSnapshot(createInitialSession(Date.now(), this.sessionSeq++))
-    );
+    const session = this.renderSession({
+      ...fromSnapshot(createInitialSession(Date.now(), this.sessionSeq++)),
+      rerunDisabled: false,
+    });
     // Anchored to the container rather than to currentSession: after a restore
     // there are older cards but no current session, and appending would file
     // the new run underneath them. insertBefore(el, null) appends anyway.
@@ -1067,7 +1081,8 @@ export class TranscriptionProgressView extends ItemView {
    * itself away.
    */
   private applyRetention(): void {
-    const limit = resolveHistoryLimit(this.getSettings());
+    const settings = this.getSettings();
+    const limit = resolveHistoryLimit(settings);
     if (limit === undefined || this.sessions.length <= limit) return;
 
     for (const session of this.sessions.slice(limit)) {

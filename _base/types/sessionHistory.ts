@@ -34,6 +34,8 @@ export interface PersistedLogEntry {
   text: string;
   /** Present when the line described a chunk result that could be re-run. */
   retryChunkIndex?: number;
+  /** A newer result superseded this one, so its Retry button is dead. */
+  retryStale?: boolean;
   sparkline?: PersistedSparkline;
 }
 
@@ -72,6 +74,12 @@ export interface PersistedSession {
   targetCh?: number;
   isCancellable: boolean;
   isLogExpanded: boolean;
+  /**
+   * Set once the controller no longer holds the context needed to re-run this
+   * run's chunks — after a reload, or once a newer run replaced it. Every
+   * re-run affordance on the card is dead from then on.
+   */
+  rerunDisabled?: boolean;
   chunk?: PersistedChunkProgress;
   logHistory: PersistedLogEntry[];
   /** A Set at runtime; an ascending array on disk. */

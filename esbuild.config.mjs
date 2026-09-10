@@ -65,8 +65,28 @@ function writeIntoPlugin(destPath, contents) {
     if (e.code !== "EPERM" && e.code !== "EACCES") throw e;
   }
 
+  // Hold on to what is installed. Removing it and then failing the retry too
+  // would leave Obsidian with no main.js at all - worse than a stale one.
+  let installed = null;
+  try {
+    installed = fs.readFileSync(destPath);
+  } catch {
+    installed = null;
+  }
+
   fs.rmSync(destPath, { force: true });
-  fs.writeFileSync(destPath, contents);
+  try {
+    fs.writeFileSync(destPath, contents);
+  } catch (e) {
+    if (installed !== null) {
+      try {
+        fs.writeFileSync(destPath, installed);
+      } catch {
+        console.error(`Could not restore the previous ${destPath}.`);
+      }
+    }
+    throw e;
+  }
 }
 
 const copy_to_plugins = {

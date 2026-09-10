@@ -127,11 +127,11 @@ export default class TranscriptionAudioPlugin extends Plugin {
     return {
       read: async () => ((await adapter.exists(path)) ? adapter.read(path) : null),
       write: (data) => adapter.write(path, data),
-      backup: async (version) => {
+      backup: async (label) => {
         const backupPath = `${dir}/${SESSION_HISTORY_FILE.replace(
           /\.json$/,
           ""
-        )}.v${version}.bak.json`;
+        )}.${label}.bak.json`;
         if (await adapter.exists(backupPath)) {
           await adapter.remove(backupPath);
         }
@@ -414,31 +414,25 @@ class TranscriptionSettingTab extends PluginSettingTab {
         text.inputEl.type = "number";
         text.inputEl.min = String(MIN_HISTORY_LIMIT);
         text.inputEl.max = String(MAX_HISTORY_LIMIT);
-        text
-          .setValue(String(settings.sessionHistoryLimit))
-          .onChange(async (value) => {
-            const limit = clampHistoryLimit(value);
-            if (limit === undefined) {
-              // Mid-typing: an empty field is not a number to save yet.
-              return;
-            }
-            settings.sessionHistoryLimit = limit;
-            await this.plugin.saveSettings();
-            await this.plugin.applyHistorySettings();
-            // Deliberately no this.display() here - re-rendering the tab would
-            // steal focus after every keystroke.
-          });
+        text.setValue(String(settings.sessionHistoryLimit));
 
-        // What is stored is already clamped, so an out-of-range number left on
-        // screen only misreports what was saved. Snapping it on the way out
-        // rather than on every keystroke keeps "150" typeable: correcting the
-        // leading "1" immediately would fight the person typing it.
-        const snapToStoredValue = () => {
-          text.setValue(String(settings.sessionHistoryLimit));
+        // Committed when the field is left, not on every keystroke. Saving
+        // mid-typing applies the intermediate value: typing "150" would pass
+        // through 1 and prune the panel down to a single record before the
+        // rest of the number arrives, and that deletion is not undone by the
+        // later keystrokes.
+        const commit = async () => {
+          const limit = clampHistoryLimit(text.inputEl.value);
+          const next = limit ?? settings.sessionHistoryLimit;
+          text.setValue(String(next));
+          if (next === settings.sessionHistoryLimit) return;
+          settings.sessionHistoryLimit = next;
+          await this.plugin.saveSettings();
+          await this.plugin.applyHistorySettings();
         };
-        // blur covers clicking away, change covers pressing Enter.
-        text.inputEl.addEventListener("blur", snapToStoredValue);
-        text.inputEl.addEventListener("change", snapToStoredValue);
+
+        text.inputEl.addEventListener("blur", () => void commit());
+        text.inputEl.addEventListener("change", () => void commit());
       });
   }
   display(): void {

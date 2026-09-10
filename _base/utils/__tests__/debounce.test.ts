@@ -37,24 +37,6 @@ describe("createDebouncedRunner", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("runs immediately on flush and drops the timer", () => {
-    const run = vi.fn();
-    const runner = createDebouncedRunner(run, 1000);
-
-    runner.schedule();
-    runner.flush();
-    expect(run).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(5000);
-    expect(run).toHaveBeenCalledTimes(1);
-  });
-
-  it("does nothing on flush when nothing is pending", () => {
-    const run = vi.fn();
-    createDebouncedRunner(run, 1000).flush();
-    expect(run).not.toHaveBeenCalled();
-  });
-
   it("forgets the pending run on cancel", () => {
     const run = vi.fn();
     const runner = createDebouncedRunner(run, 1000);
