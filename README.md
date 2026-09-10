@@ -71,15 +71,15 @@ Run history is written to `progress-sessions.json` inside the plugin's own folde
 
 ### Version 0.8.0
 
-- **Works on iPhone, iPad, and Android**
+- **Mobile support**
   - Transcription used to fail on every attempt in the Obsidian mobile app. It now runs there the same way it does on desktop
   - Long recordings use noticeably less memory, so a phone is less likely to run out of it mid-run
-- **Simpler transcription settings**
+- **Simplified transcription settings**
   - The three transcription modes are replaced by one `Summarize transcript` toggle. A transcript file is always created; turn the toggle off to keep only the transcript
   - Template prompt settings are gone. The `Default prompt` is used for summarization, and as the fallback when category classification matches nothing
   - The `General` category is retired — an unmatched transcript uses the default prompt instead. A prompt you had customized in `General` is carried over
   - `.wav` recordings now produce a transcript file and a summary like every other format, and gained per-chunk retry
-- **The progress panel remembers your runs**
+- **Run history**
   - Records stay in the panel after the plugin reloads or updates, each showing when the run started
   - Remove a record with the × on its card, or run the `Open progress panel` command to bring the panel back without starting a transcription
   - New settings control this: `Keep run history` (on) → `Auto-remove old records` (on) → `Records to keep` (20)
