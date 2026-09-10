@@ -245,4 +245,38 @@ describe("getCompatibleSettings", () => {
     expect(settings.secretApiKeyName).toBe(DEFAULT_SETTINGS.secretApiKeyName);
     expect(shouldSave).toBe(true);
   });
+
+  it("repairs a history limit stored outside the supported range", () => {
+    expect(
+      getCompatibleSettings({ sessionHistoryLimit: 0 }).settings
+        .sessionHistoryLimit
+    ).toBe(1);
+    expect(
+      getCompatibleSettings({ sessionHistoryLimit: 9999 }).settings
+        .sessionHistoryLimit
+    ).toBe(200);
+    expect(getCompatibleSettings({ sessionHistoryLimit: 0 }).shouldSave).toBe(
+      true
+    );
+  });
+
+  it("falls back to the default when the history limit is not a number", () => {
+    const { settings, shouldSave } = getCompatibleSettings({
+      sessionHistoryLimit: null,
+    });
+
+    expect(settings.sessionHistoryLimit).toBe(
+      DEFAULT_SETTINGS.sessionHistoryLimit
+    );
+    expect(shouldSave).toBe(true);
+  });
+
+  it("leaves a valid history limit alone", () => {
+    const { settings, shouldSave } = getCompatibleSettings({
+      sessionHistoryLimit: 50,
+    });
+
+    expect(settings.sessionHistoryLimit).toBe(50);
+    expect(shouldSave).toBe(false);
+  });
 });

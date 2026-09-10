@@ -1332,7 +1332,12 @@ export class TranscriptionController {
     return expiration > Date.now() + 60 * 1000;
   }
 
-  private async openProgressView(): Promise<void> {
+  /**
+   * Reveals the progress panel, creating it in the right sidebar when it is
+   * not open. Also reachable as a command, so the panel and its stored run
+   * history can be brought back without starting a transcription.
+   */
+  async openProgressView(): Promise<void> {
     const leaves = this.app.workspace.getLeavesOfType(this.progressViewType);
     if (leaves.length > 0) {
       this.app.workspace.revealLeaf(leaves[0]);

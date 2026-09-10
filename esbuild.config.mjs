@@ -48,6 +48,47 @@ if you want to view the source, please visit the github repository of this plugi
 */
 `;
 
+/**
+ * Writes one file into the plugin folder.
+ *
+ * Not fs.copyFileSync: that goes through copyfile(3), which also replicates
+ * metadata and ACLs, and a File Provider folder (Dropbox, iCloud Drive,
+ * OneDrive) rejects that with EPERM when the destination already exists.
+ * Removing the old file first turns the overwrite into a plain create, which
+ * those folders do allow.
+ */
+function writeIntoPlugin(destPath, contents) {
+  try {
+    fs.writeFileSync(destPath, contents);
+    return;
+  } catch (e) {
+    if (e.code !== "EPERM" && e.code !== "EACCES") throw e;
+  }
+
+  // Hold on to what is installed. Removing it and then failing the retry too
+  // would leave Obsidian with no main.js at all - worse than a stale one.
+  let installed = null;
+  try {
+    installed = fs.readFileSync(destPath);
+  } catch {
+    installed = null;
+  }
+
+  fs.rmSync(destPath, { force: true });
+  try {
+    fs.writeFileSync(destPath, contents);
+  } catch (e) {
+    if (installed !== null) {
+      try {
+        fs.writeFileSync(destPath, installed);
+      } catch {
+        console.error(`Could not restore the previous ${destPath}.`);
+      }
+    }
+    throw e;
+  }
+}
+
 const copy_to_plugins = {
   name: "copy_to_plugins",
   setup(build) {
@@ -78,14 +119,36 @@ const copy_to_plugins = {
         fs.mkdirSync(plugin_path, { recursive: true });
       }
 
-      fs.copyFileSync("./main.js", path.join(plugin_path, "main.js"));
-      fs.writeFileSync(
-        path.join(plugin_path, "manifest.json"),
-        `${JSON.stringify(targetManifest, null, "\t")}\n`
-      );
-      fs.copyFileSync("./styles.css", path.join(plugin_path, "styles.css"));
-      // add empty .hotreload file
-      fs.writeFileSync(path.join(plugin_path, ".hotreload"), "");
+      try {
+        writeIntoPlugin(
+          path.join(plugin_path, "main.js"),
+          fs.readFileSync("./main.js")
+        );
+        writeIntoPlugin(
+          path.join(plugin_path, "manifest.json"),
+          `${JSON.stringify(targetManifest, null, "\t")}\n`
+        );
+        writeIntoPlugin(
+          path.join(plugin_path, "styles.css"),
+          fs.readFileSync("./styles.css")
+        );
+        // add empty .hotreload file
+        writeIntoPlugin(path.join(plugin_path, ".hotreload"), "");
+      } catch (e) {
+        if (e.code !== "EPERM" && e.code !== "EACCES") throw e;
+        // Watch mode should keep running: the bundle is still built, it just
+        // did not reach the vault.
+        console.error(
+          [
+            `Could not write to ${plugin_path} (${e.code}).`,
+            "The vault sits in a synced folder, so the process running this build needs access to it:",
+            "  - System Settings > Privacy & Security > Full Disk Access, then add the terminal or editor running this build and restart it",
+            "  - In the sync client, keep that folder available offline rather than online-only",
+            "  - If the folder is locked: chflags -R nouchg '<plugin folder>'",
+          ].join("\n")
+        );
+        return;
+      }
 
       console.log(
         `Plugin built and copied to ${plugin_path} (manifest id: ${targetManifest.id})`

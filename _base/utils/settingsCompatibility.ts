@@ -6,6 +6,7 @@ import {
   MODEL_MIGRATIONS,
 } from "_base/constants/setting";
 import { AudioPluginSettings, TranscriptionCategory } from "_base/types/setting";
+import { clampHistoryLimit } from "_base/utils/sessionSnapshot";
 
 const RETIRED_GENERAL_CATEGORY_ID = "general";
 
@@ -68,6 +69,8 @@ const PRIMITIVE_TYPES: Partial<
 > = {
   summarizeTranscript: "boolean",
   enableCategoryClassification: "boolean",
+  enableSessionHistory: "boolean",
+  autoPruneSessionHistory: "boolean",
   prompt: "string",
   model: "string",
   secretApiKeyName: "string"
@@ -175,6 +178,16 @@ export function getCompatibleSettings(saved: unknown): CompatibleSettings {
     settings.summarizeTranscript = true;
   } else if (savedMode === "transcription-only") {
     settings.summarizeTranscript = false;
+  }
+
+  // A limit persisted as 0, negative or NaN would silently keep a single
+  // record, so it is repaired here rather than left for the panel to trip on.
+  const normalizedLimit =
+    clampHistoryLimit(settings.sessionHistoryLimit) ??
+    DEFAULT_SETTINGS.sessionHistoryLimit;
+  if (normalizedLimit !== settings.sessionHistoryLimit) {
+    settings.sessionHistoryLimit = normalizedLimit;
+    shouldSave = true;
   }
 
   const previousModel = settings.model;

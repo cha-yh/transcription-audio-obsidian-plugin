@@ -1,3 +1,4 @@
+import { DEFAULT_HISTORY_LIMIT } from "_base/constants/sessionHistory";
 import {
   AudioPluginSettings,
   TranscriptionCategory,
@@ -132,6 +133,9 @@ export const DEFAULT_SETTINGS: AudioPluginSettings = {
   prompt: DEFAULT_BASIC_MODE_PROMPT,
   enableCategoryClassification: false,
   categories: DEFAULT_CATEGORIES,
+  enableSessionHistory: true,
+  autoPruneSessionHistory: true,
+  sessionHistoryLimit: DEFAULT_HISTORY_LIMIT,
 };
 
 export const MODELS: string[] = [

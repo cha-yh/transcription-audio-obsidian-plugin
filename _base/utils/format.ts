@@ -33,6 +33,22 @@ export function formatTimestamp(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+/**
+ * Wall-clock time in the reader's own locale, for stamping when a run started.
+ * Falls back to `toLocaleString` where `Intl` rejects the option pair, which
+ * some mobile WebViews still do.
+ */
+export function formatLocaleDateTime(date: Date): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'medium',
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
 /** Chunk range as "start-end (length)", e.g. "19:58-39:58 (20:00)". */
 export function formatTimeRange(startMs: number, endMs: number): string {
   const lengthMs = Math.max(0, endMs - startMs);
