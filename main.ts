@@ -367,10 +367,22 @@ class TranscriptionSettingTab extends PluginSettingTab {
   private displayHistorySettings(containerEl: HTMLElement): void {
     const settings = this.plugin.settings;
 
+    // The summarization settings above end in the category list, which has a
+    // heading of its own; without a break of its own this section reads as a
+    // continuation of it rather than as something independent of summarizing.
+    containerEl.createEl("hr", {
+      cls: "transcription-audio-setting-divider",
+    });
+    this.displayDescriptionBlock(
+      containerEl,
+      "Run history",
+      "The progress panel's record of past runs, stored alongside the plugin's settings."
+    );
+
     new Setting(containerEl)
       .setName("Keep run history")
       .setDesc(
-        "Keeps the progress panel's records across plugin reloads and updates. Turning this off stops new records being saved; records already on disk are left alone."
+        "Keeps records across plugin reloads and updates. Turning this off stops new records being saved; records already on disk are left alone."
       )
       .addToggle((toggle) => {
         toggle
@@ -435,6 +447,57 @@ class TranscriptionSettingTab extends PluginSettingTab {
         text.inputEl.addEventListener("change", () => void commit());
       });
   }
+  /**
+   * Everything that only matters once a summary is produced. Kept apart
+   * from display() so that a setting unrelated to summarization cannot be
+   * hidden by this condition, which is what happened to run history.
+   */
+  private displaySummarySettings(containerEl: HTMLElement): void {
+    new Setting(containerEl)
+      .setName("Default prompt")
+      .setDesc("Used for summarization and whenever no category matches.")
+      .addTextArea((text) => {
+        text.inputEl.classList.add("transcription-audio-setting-text-area");
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.prompt)
+          .setValue(this.plugin.settings.prompt)
+          .onChange(async (value) => {
+            this.plugin.settings.prompt = value;
+            await this.plugin.saveSettings();
+          });
+
+        this.addInlineResetButton(text.inputEl, "Reset to default", async () => {
+          const confirmed = await this.confirmReset(
+            "Reset the default prompt to its default value?"
+          );
+          if (!confirmed) return;
+          this.plugin.settings.prompt = DEFAULT_BASIC_MODE_PROMPT;
+          await this.plugin.saveSettings();
+          new Notice("Prompt reset to default.");
+          this.display();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Category classification")
+      .setDesc(
+        "Classify each transcript and use the matching category prompt. The default prompt is used when no category matches."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.enableCategoryClassification)
+          .onChange(async (value) => {
+            this.plugin.settings.enableCategoryClassification = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    if (this.plugin.settings.enableCategoryClassification) {
+      this.displayCategorySettings(containerEl);
+    }
+  }
+
   display(): void {
     let { containerEl } = this;
     containerEl.empty();
@@ -492,50 +555,8 @@ class TranscriptionSettingTab extends PluginSettingTab {
           });
       });
 
-    if (!this.plugin.settings.summarizeTranscript) return;
-
-    new Setting(containerEl)
-      .setName("Default prompt")
-      .setDesc("Used for summarization and whenever no category matches.")
-      .addTextArea((text) => {
-        text.inputEl.classList.add("transcription-audio-setting-text-area");
-        text
-          .setPlaceholder(DEFAULT_SETTINGS.prompt)
-          .setValue(this.plugin.settings.prompt)
-          .onChange(async (value) => {
-            this.plugin.settings.prompt = value;
-            await this.plugin.saveSettings();
-          });
-
-        this.addInlineResetButton(text.inputEl, "Reset to default", async () => {
-          const confirmed = await this.confirmReset(
-            "Reset the default prompt to its default value?"
-          );
-          if (!confirmed) return;
-          this.plugin.settings.prompt = DEFAULT_BASIC_MODE_PROMPT;
-          await this.plugin.saveSettings();
-          new Notice("Prompt reset to default.");
-          this.display();
-        });
-      });
-
-    new Setting(containerEl)
-      .setName("Category classification")
-      .setDesc(
-        "Classify each transcript and use the matching category prompt. The default prompt is used when no category matches."
-      )
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.enableCategoryClassification)
-          .onChange(async (value) => {
-            this.plugin.settings.enableCategoryClassification = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
-
-    if (this.plugin.settings.enableCategoryClassification) {
-      this.displayCategorySettings(containerEl);
+    if (this.plugin.settings.summarizeTranscript) {
+      this.displaySummarySettings(containerEl);
     }
 
     this.displayHistorySettings(containerEl);

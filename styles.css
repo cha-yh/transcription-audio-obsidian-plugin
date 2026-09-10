@@ -378,3 +378,10 @@
   gap: 8px;
   margin-top: 12px;
 }
+
+/* Marks where a settings section that is independent of the one above begins. */
+.transcription-audio-setting-divider {
+  margin: 24px 0 16px;
+  border: none;
+  border-top: 1px solid var(--background-modifier-border);
+}
