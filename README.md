@@ -71,28 +71,28 @@ Run history is written to `progress-sessions.json` inside the plugin's own folde
 
 ### Version 0.8.0
 
-- **Runs on iOS and Android**
-  - Transcription used to fail on every attempt in the mobile app; the upload path relied on a Node global the WebView does not have
-  - Peak memory on long recordings drops by roughly 40%, and chunks are capped at four in flight
-  - A bundle scanner fails the build when a desktop-only global reaches it, and CI now runs the suite on every push
-- **Transcription modes collapse into one toggle**
-  - Three modes become a single `Summarize transcript` toggle (on by default): a transcript file is always produced, and only summarization is optional
-  - Template prompt settings are gone — the UI and every reader had already been removed
-  - The synthetic `General` category is retired; an unmatched classification falls back to the default prompt, and a customized `General` prompt is carried into it
-  - PCM16 WAV input now takes the same path as everything else, gaining a transcript file, four-way concurrency, incremental writes, and per-chunk retry
-  - An unreadable WAV header or an empty chunk plan falls back to a whole-file upload instead of failing the run
-  - A file named `Meeting: Q3.m4a` no longer leaves the note's frontmatter unparseable
-- **The progress panel keeps its records**
-  - Records survive plugin reloads and updates, each stamped with when the run started and removable individually
-  - New `Open progress panel` command reopens the panel with those records without starting a transcription
-  - Settings: `Keep run history` (on) → `Auto-remove old records` (on) → `Records to keep` (20, range 1–200)
-  - A run interrupted by a reload is shown as `Interrupted`; reopening the sidebar mid-run now keeps the live run instead of showing an empty panel
+- **Works on iPhone, iPad, and Android**
+  - Transcription used to fail on every attempt in the Obsidian mobile app. It now runs there the same way it does on desktop
+  - Long recordings use noticeably less memory, so a phone is less likely to run out of it mid-run
+- **Simpler transcription settings**
+  - The three transcription modes are replaced by one `Summarize transcript` toggle. A transcript file is always created; turn the toggle off to keep only the transcript
+  - Template prompt settings are gone. The `Default prompt` is used for summarization, and as the fallback when category classification matches nothing
+  - The `General` category is retired — an unmatched transcript uses the default prompt instead. A prompt you had customized in `General` is carried over
+  - `.wav` recordings now produce a transcript file and a summary like every other format, and gained per-chunk retry
+- **The progress panel remembers your runs**
+  - Records stay in the panel after the plugin reloads or updates, each showing when the run started
+  - Remove a record with the × on its card, or run the `Open progress panel` command to bring the panel back without starting a transcription
+  - New settings control this: `Keep run history` (on) → `Auto-remove old records` (on) → `Records to keep` (20)
+  - A run cut short by a reload is marked `Interrupted`. Closing and reopening the sidebar while a run is going no longer loses it
 - **Model updates**
-  - Added `gemini-3.8-flash`, now the default, listed ahead of `gemini-3.7-flash`
+  - Added `gemini-3.8-flash`, the new default
 - **Fixes**
-  - A recording short enough to be sent whole can now be retried when it fails — it used to end the run with no Retry button, which is the one case the button exists for
-  - A run that produced no transcript is reported as failed rather than as a success
-  - Skipping summarization when every chunk failed, instead of billing two requests to summarize nothing
+  - A short recording that failed can now be retried from the panel. Previously the Retry button never appeared for one
+  - A run that produced no transcript is reported as failed instead of successful
+  - When a transcription fails, summarization is skipped rather than run against an empty transcript
+  - An audio file whose name contains `: ` no longer breaks the note's properties
+  - A `.wav` recording no longer ignores the summarization setting
+  - Settings survive being edited or corrupted by hand: a cleared category list stays cleared, and a malformed entry is repaired rather than dropped
 
 ### Version 0.7.1 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.7.1)
 
