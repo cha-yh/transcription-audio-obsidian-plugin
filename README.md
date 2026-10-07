@@ -85,30 +85,33 @@ Run history is written to `progress-sessions.json` inside the plugin's own folde
 
 ## Changelog
 
-### Version 0.8.0
+### Version 0.9.0
+
+- **Dedicated transcription model**
+  - Transcription now always runs on Google's speech-to-text model, `gemini-3.5-transcribe`. The `Model` setting now picks only the summary model
+  - This model does not follow prompts, so the transcription prompt is gone. Without speaker labels the transcript comes back as one block of text
+- **Transcription options**
+  - `Mode`: Verbatim (default) keeps fillers and false starts; Smart removes them and tidies punctuation and lists
+  - `Speaker labels`: a labelled paragraph per speaker, up to 8. Labels restart in every 20-minute chunk of a recording over 30 minutes
+  - `Timestamps`: each paragraph starts with its time in the recording
+  - `Custom vocabulary` and `Language hints` help with names, jargon and language detection
+  - Options the API cannot combine are greyed out, with the reason in their description
+- **Settings layout**
+  - Settings are grouped into General, Transcription, Summary and Run history. The summary model shows only while `Summarize transcript` is on
+- **Heads-up**
+  - On a Free Tier API key this model allows 10,000 input tokens per minute — about 7 minutes of audio. A recording over 30 minutes is sent as parallel chunks and can hit that limit
+
+### Version 0.8.1 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.8.1)
+
+- **Settings layout**: run history settings got their own heading and no longer disappear when `Summarize transcript` is off
+
+### Version 0.8.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.8.0)
 
 - **Mobile support**
-  - Transcription used to fail on every attempt in the Obsidian mobile app. It now runs there the same way it does on desktop
-  - Long recordings use noticeably less memory, so a phone is less likely to run out of it mid-run
 - **Simplified transcription settings**
-  - The three transcription modes are replaced by one `Summarize transcript` toggle. A transcript file is always created; turn the toggle off to keep only the transcript
-  - Template prompt settings are gone. The `Default prompt` is used for summarization, and as the fallback when category classification matches nothing
-  - The `General` category is retired — an unmatched transcript uses the default prompt instead. A prompt you had customized in `General` is carried over
-  - `.wav` recordings now produce a transcript file and a summary like every other format, and gained per-chunk retry
 - **Run history**
-  - Records stay in the panel after the plugin reloads or updates, each showing when the run started
-  - Remove a record with the × on its card, or run the `Open progress panel` command to bring the panel back without starting a transcription
-  - New settings control this: `Keep run history` (on) → `Auto-remove old records` (on) → `Records to keep` (20)
-  - A run cut short by a reload is marked `Interrupted`. Closing and reopening the sidebar while a run is going no longer loses it
-- **Model updates**
-  - Added `gemini-3.8-flash`, the new default
+- **Model updates**: added `gemini-3.8-flash`, the new default
 - **Fixes**
-  - A short recording that failed can now be retried from the panel. Previously the Retry button never appeared for one
-  - A run that produced no transcript is reported as failed instead of successful
-  - When a transcription fails, summarization is skipped rather than run against an empty transcript
-  - An audio file whose name contains `: ` no longer breaks the note's properties
-  - A `.wav` recording no longer ignores the summarization setting
-  - Settings survive being edited or corrupted by hand: a cleared category list stays cleared, and a malformed entry is repaired rather than dropped
 
 ### Version 0.7.1 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.7.1)
 
