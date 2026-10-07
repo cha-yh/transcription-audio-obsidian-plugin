@@ -6,16 +6,14 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 
 - Smart audio detection from links or embeds in the active note
 - Transcription with Google's dedicated speech-to-text model (`gemini-3.5-transcribe`), with optional speaker labels, timestamps, custom vocabulary and language hints
-- Summarization with a Gemini model of your choice
-- Always-on transcription with optional transcript summarization
+- Optional summarization of the transcript with a Gemini model of your choice, with category-specific prompts
 - Long-audio transcription with time-based chunking and chunk retry handling
-- Category classification for transcript-based summarization
 - Reusable transcript file creation and transcript file links
 - Progress panel (sidebar) with live status:
   - Detected audio filename and size
   - Audio preparation status
   - API request start/completion times
-  - Gemini usage logs (prompt/output/total tokens)
+  - Gemini usage logs (prompt/output/total tokens; the transcription model reports its output as 0)
   - Cancel button to stop upload/API request in progress
   - Success/error result
   - Records kept across plugin reloads and updates, each stamped with when the run started and removable individually
@@ -36,7 +34,9 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 
 ## Configuration
 
-Open Settings → Transcription Audio:
+Open Settings → Transcription Audio. Settings are grouped into four sections.
+
+General:
 
 - API Key: Configure the Gemini API key to use. The deprecated plain-text API key input has been removed.
 - On older Obsidian versions, API key storage is disabled and you will see an update-required message (Obsidian 1.11.4+)
@@ -73,13 +73,13 @@ Run history:
    <img alt="Image" src="https://github.com/user-attachments/assets/254e3621-4733-4961-ab90-ce58792d6cc6" />
 4. A progress panel will automatically open in the right sidebar, showing real-time status updates including file upload progress, API request status, and transcription progress.
    <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
-5. When complete, the transcription, summary, or transcript link is inserted at your starting cursor position.
+5. When complete, a link to the transcript file is inserted at your starting cursor position, followed by the summary when `Summarize transcript` is on.
 
 To bring the panel back later, run the command "Open progress panel". It reveals the panel in the right sidebar and restores the saved run history.
 
 ## Privacy & Data
 
-Audio content is sent to Google’s Gemini API for processing. The plugin does not store your audio or transcripts outside your vault. Keep your API key secure and review your organization’s data policies before use.
+Audio content is sent to Google’s Gemini API for transcription, and the transcript is sent again when it is summarized. The plugin does not store your audio or transcripts outside your vault. Keep your API key secure and review your organization’s data policies before use.
 
 Run history is written to `progress-sessions.json` inside the plugin's own folder, alongside its settings. It holds the progress log — file paths, model names and API error messages — but never your API key or transcript text. Switch off "Keep run history" if you would rather nothing were written. Opening the same vault in two windows at once can leave whichever window writes last as the one that wins.
 
