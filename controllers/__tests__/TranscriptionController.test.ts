@@ -470,7 +470,7 @@ describe("TranscriptionController — pure helpers", () => {
       await (ctrl as any).rerunChunk(1);
 
       expect(app.vault.readBinary).toHaveBeenCalled();
-      const audio = transcribe.mock.calls[0][2];
+      const audio = transcribe.mock.calls[0][1];
       expect(audio.kind).toBe("upload");
       expect(audio.mimeType).toBe("audio/mp4");
       expect((ctrl as any).audioService.decodeToWavPcm16).not.toHaveBeenCalled();
@@ -504,7 +504,7 @@ describe("TranscriptionController — pure helpers", () => {
       await (ctrl as any).rerunChunk(1);
 
       expect(app.vault.readBinary).not.toHaveBeenCalled();
-      expect(transcribe.mock.calls[0][2].kind).toBe("cached");
+      expect(transcribe.mock.calls[0][1].kind).toBe("cached");
     });
   });
 

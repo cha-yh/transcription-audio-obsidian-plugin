@@ -1,11 +1,12 @@
 # Transcription Audio(Beta) Plugin for Obsidian
 
-Turn your audio into structured Markdown notes inside Obsidian. This plugin detects an audio file linked in your current note, sends it to Gemini for transcription, summarization, or transcript generation, and inserts the result back into your note. A right-hand progress panel shows what’s happening step by step.
+Turn your audio into structured Markdown notes inside Obsidian. This plugin detects an audio file linked in your current note, transcribes it with Gemini's dedicated speech-to-text model, optionally summarizes the transcript, and inserts the result back into your note. A right-hand progress panel shows what’s happening step by step.
 
 ## Features
 
 - Smart audio detection from links or embeds in the active note
-- Google Gemini transcription, transcript generation, and summarization
+- Transcription with Google's dedicated speech-to-text model (`gemini-3.5-transcribe`), with optional speaker labels, timestamps, custom vocabulary and language hints
+- Summarization with a Gemini model of your choice
 - Always-on transcription with optional transcript summarization
 - Long-audio transcription with time-based chunking and chunk retry handling
 - Category classification for transcript-based summarization
@@ -39,11 +40,26 @@ Open Settings → Transcription Audio:
 
 - API Key: Configure the Gemini API key to use. The deprecated plain-text API key input has been removed.
 - On older Obsidian versions, API key storage is disabled and you will see an update-required message (Obsidian 1.11.4+)
+
+Transcription — always done by Google's dedicated speech-to-text model, `gemini-3.5-transcribe`. It does not follow prompts; only these options shape the transcript:
+
+- Mode (default: Verbatim): Verbatim keeps fillers, repetitions and false starts. Smart removes them and tidies punctuation and lists, but cannot be combined with speaker labels or timestamps.
+- Speaker labels (default: off): A labelled paragraph per speaker, up to 8 speakers (3 or more is experimental). Labels restart in every 20-minute chunk of a recording over 30 minutes.
+- Timestamps (default: off): Each paragraph starts with its time in the recording. May lower overall accuracy.
+- Custom vocabulary: Terms to recognize, one per line (up to 1,000; best around 100). Not used while speaker labels or timestamps are on.
+- Language hints: Comma-separated BCP-47 codes such as `ko-KR, en-US`. Leave empty to detect the language automatically.
+- Speaker labels and timestamps limit a request to 30 minutes, and Free Tier keys are limited to 10,000 input tokens per minute (about 7 minutes of audio).
+
+Summary:
+
 - Summarize transcript (default: on): transcription is always created; turn this off to create and link only the raw transcript.
-- Model: Select a Gemini-compatible model (`gemini-3.8-flash`(default), `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`)
+- Model: The model that writes the summary (`gemini-3.8-flash`(default), `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
 - Default prompt: Customize the instruction used to summarize transcripts and as the fallback when a category does not match.
 - Category classification: When enabled, the matching category prompt is used. The `General` category is not included; unmatched transcripts use the default prompt.
+
+Run history:
+
 - Keep run history: Keeps the progress panel's records across plugin reloads and updates. Turning it off stops new records being saved; records already on disk are left alone and come back when you turn it on again.
   - Auto-remove old records: Drops the oldest records once the panel passes the limit.
   - Records to keep: How many runs stay in the panel (1-200, default 20). A run in progress is always kept.

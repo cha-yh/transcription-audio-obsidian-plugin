@@ -5,7 +5,7 @@
 - User invokes the "Transcribe audio" command while the cursor is in a Markdown note
 - Plugin resolves the API key from the selected API key entry
 - A transcript is always generated; the summary setting controls whether it is summarized afterwards
-- `TranscriptionController.run()` is called with the editor context and a `TranscriptionRunOptions` object carrying the resolved API key, default prompt, model, and the summary/classification settings
+- `TranscriptionController.run()` is called with the editor context and a `TranscriptionRunOptions` object carrying the resolved API key, the transcription model and its options, and the summary model, prompt and classification settings
 
 ## Pre-flight Validation
 
@@ -54,6 +54,14 @@ in how the chunk ranges are chosen, and everything after that is shared.
 - Failed chunks are marked `{{CHUNK_FAILED:N}}` and queued for user-initiated retry via the progress bus; the run finalizes normally so every chunk that succeeded survives
 - After all chunks settle, quota errors are surfaced immediately; cancellation aborts the entire flow
 - The file is finalized (renamed from `_temp.md` to `.md`) and a rerun session is recorded, which is what makes the Retry button on a chunk's log line work
+
+### The transcription request (shared)
+
+- Every request — whole file, chunk or retry — goes to the dedicated speech-to-text model (`gemini-3.5-transcribe`) through the Interactions API (`POST /v1beta/interactions`), called with `fetch` because the bundled `@google/genai` predates it. The model takes no prompt
+- The audio is referenced by the URI of its Files API upload as `{ type: "audio", uri, mime_type }`; the published samples show `type: "file"`, which the API rejects
+- `buildTranscriptionGenerationConfig()` turns the transcription settings into `generation_config.transcription_config`, applying the API's rules first: smart mode drops speaker labels and timestamps, and either of those drops the custom vocabulary. With everything at its default the field is left out
+- The transcript is read from `steps[].content[].text` of the `model_output` step. With speaker labels or timestamps on, it is rebuilt from the `word_info` annotations instead — a paragraph per speaker (or per long pause), prefixed with `[mm:ss]` shifted by the chunk's start so times follow the whole recording. Speaker labels restart in every chunk
+- Speaker labels and timestamps cap a request at 30 minutes, which the 20-minute chunks already respect. Free Tier keys get 10,000 input tokens a minute (about 7 minutes of audio), so concurrent chunks can run into 429, which ends the run like any quota error
 
 ## Classification and Summarization
 

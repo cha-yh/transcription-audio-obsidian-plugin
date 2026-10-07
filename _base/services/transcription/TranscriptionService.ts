@@ -1,11 +1,17 @@
+import { GoogleGenAI, createUserContent } from "@google/genai";
 import {
-  GoogleGenAI,
-  createUserContent,
-  createPartFromUri,
-} from "@google/genai";
+  TranscriptionOptions,
+  buildTranscriptionGenerationConfig,
+  effectiveTranscriptionOptions,
+  extractTranscribedWords,
+  formatTranscribedWords,
+} from "_base/services/transcription/transcriptionConfig";
 
 const RESUMABLE_UPLOAD_ENDPOINT =
   "https://generativelanguage.googleapis.com/upload/v1beta/files";
+// The bundled SDK predates the Interactions API, so it is called directly.
+const INTERACTIONS_ENDPOINT =
+  "https://generativelanguage.googleapis.com/v1beta/interactions";
 const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
 
 export interface TranscriptionUsage {
@@ -67,6 +73,44 @@ export function isTranscriptionCancelledError(error: unknown): boolean {
     error instanceof TranscriptionCancelledError ||
     (error instanceof Error && error.name === "AbortError")
   );
+}
+
+type InteractionPayload = {
+  output_text?: unknown;
+  steps?: {
+    type?: string;
+    content?: { type?: string; text?: unknown }[];
+  }[];
+  usage?: Record<string, unknown>;
+};
+
+/** The transcript out of an Interactions API response. */
+export function extractInteractionText(payload: unknown): string {
+  const interaction = (payload ?? {}) as InteractionPayload;
+  if (typeof interaction.output_text === "string") {
+    return interaction.output_text;
+  }
+
+  return (interaction.steps ?? [])
+    .filter((step) => step.type === "model_output")
+    .flatMap((step) => step.content ?? [])
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text as string)
+    .join("");
+}
+
+/** Token counts out of an Interactions API response, where it reports them. */
+export function extractInteractionUsage(payload: unknown): TranscriptionUsage {
+  const usage = ((payload ?? {}) as InteractionPayload).usage ?? {};
+  const count = (key: string) =>
+    typeof usage[key] === "number" ? (usage[key] as number) : undefined;
+  return {
+    promptTokenCount: count("total_input_tokens"),
+    candidatesTokenCount: count("total_output_tokens"),
+    thoughtsTokenCount: count("total_thought_tokens"),
+    toolUsePromptTokenCount: count("total_tool_use_tokens"),
+    totalTokenCount: count("total_tokens"),
+  };
 }
 
 export class TranscriptionService {
@@ -282,6 +326,78 @@ export class TranscriptionService {
     throw new Error("File upload failed: no finalized response received");
   }
 
+  /**
+   * Transcribes an uploaded file with a dedicated speech-to-text model. These
+   * models take no prompt; `options` is all that shapes the result.
+   */
+  private async transcribeWithInteractions(
+    apiKey: string,
+    model: string,
+    uploadedFile: UploadedFileInfo,
+    timeoutMs: number,
+    options: TranscriptionOptions,
+    offsetMs: number,
+    abortSignal?: AbortSignal
+  ): Promise<{ text: string; usage: TranscriptionUsage }> {
+    const generationConfig = buildTranscriptionGenerationConfig(options);
+
+    const response = await this.fetchWithTimeoutAndCancel(
+      INTERACTIONS_ENDPOINT,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          model: `models/${model}`,
+          // The published samples show `type: "file"`, which the API rejects.
+          input: [
+            {
+              type: "audio",
+              uri: uploadedFile.uri,
+              mime_type: uploadedFile.mimeType,
+            },
+          ],
+          ...(generationConfig ? { generation_config: generationConfig } : {}),
+        }),
+      },
+      timeoutMs,
+      `Transcription timed out after ${timeoutMs} ms`,
+      abortSignal
+    );
+
+    if (!response.ok) {
+      // The body carries the API's own status, e.g. RESOURCE_EXHAUSTED, which
+      // wrapApiError reads to tell a quota error from any other failure.
+      const body = await response.text().catch(() => "");
+      throw new Error(
+        `Transcription request failed: ${response.status} ${response.statusText} ${body}`.trim()
+      );
+    }
+
+    const payload = await response.json();
+    const effective = effectiveTranscriptionOptions(options);
+    const words =
+      effective.speakerDiarization || effective.wordTimestamps
+        ? extractTranscribedWords(payload)
+        : [];
+
+    return {
+      // Speakers and times only exist on the word annotations; the plain text
+      // carries neither, so it is the fallback when none came back.
+      text:
+        words.length > 0
+          ? formatTranscribedWords(words, {
+              speakers: effective.speakerDiarization,
+              timestamps: effective.wordTimestamps,
+              offsetMs,
+            })
+          : extractInteractionText(payload),
+      usage: extractInteractionUsage(payload),
+    };
+  }
+
   private async raceWithTimeoutAndCancel<T>(
     work: Promise<T>,
     timeoutMs: number,
@@ -452,26 +568,29 @@ export class TranscriptionService {
     }
   }
 
+  /**
+   * Transcribes audio with a dedicated speech-to-text model through the
+   * Interactions API, uploading it first unless it is already on Google's side.
+   */
   async transcribe(
     apiKey: string,
-    prompt: string,
     audio: TranscriptionAudioSource,
     model: string,
+    transcriptionOptions: TranscriptionOptions,
     timeoutMs: number = 6 * 60 * 1000,
     onFileUploadStart?: () => void,
     onFileUploadComplete?: (elapsedMs: number, uploadedFile: UploadedFileInfo) => void,
     onApiRequestStart?: () => void,
     onApiRequestComplete?: (elapsedMs: number) => void,
     abortSignal?: AbortSignal,
-    disableThinking?: boolean
+    /** Where this audio starts in the recording, for word timestamps. */
+    offsetMs: number = 0
   ): Promise<TranscriptionResult> {
     if (!apiKey) {
       throw new Error("API Key is not provided.");
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey });
-
       let uploadedFile: UploadedFileInfo;
 
       if (audio.kind === "cached") {
@@ -504,42 +623,26 @@ export class TranscriptionService {
       onApiRequestStart?.();
       const apiRequestStartAt = performance.now();
 
-      // create content and receive response
-      const response = await this.raceWithTimeoutAndCancel(
-        ai.models.generateContent({
-          model: model,
-          contents: createUserContent([
-            createPartFromUri(uploadedFile.uri, uploadedFile.mimeType),
-            prompt,
-          ]),
-          config: {
-            abortSignal,
-            ...(disableThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
-          },
-        }),
+      const { text, usage } = await this.transcribeWithInteractions(
+        apiKey,
+        model,
+        uploadedFile,
         timeoutMs,
-        `Transcription timed out after ${timeoutMs} ms`,
+        transcriptionOptions,
+        offsetMs,
         abortSignal
       );
 
-      if (!response.text) {
+      if (!text) {
         throw new Error("No text response from model");
       }
-
-      const text = response.text;
-
-      const usageInfo = this.extractUsage(response);
 
       const apiRequestElapsedMs = Math.round(
         performance.now() - apiRequestStartAt
       );
       onApiRequestComplete?.(apiRequestElapsedMs);
 
-      return {
-        text,
-        usage: usageInfo,
-        uploadedFile,
-      };
+      return { text, usage, uploadedFile };
     } catch (error) {
       if (!isTranscriptionCancelledError(error)) {
         console.error("Transcription failed:", error);

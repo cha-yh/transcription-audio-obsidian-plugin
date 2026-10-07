@@ -31,7 +31,9 @@ import {
   MODELS,
   DEFAULT_BASIC_MODE_PROMPT,
   DEFAULT_CATEGORIES,
+  MAX_CUSTOM_VOCABULARY_TERMS,
 } from "_base/constants/setting";
+import { TranscriptionMode } from "_base/types/setting";
 import { getCompatibleSettings } from "_base/utils/settingsCompatibility";
 
 const SECRET_STORAGE_VERSION_MESSAGE =
@@ -195,6 +197,14 @@ export default class TranscriptionAudioPlugin extends Plugin {
       apiKey,
       prompt: this.settings.prompt || DEFAULT_BASIC_MODE_PROMPT,
       model: this.settings.model,
+      transcriptionModel: this.settings.transcriptionModel,
+      transcriptionOptions: {
+        transcriptionMode: this.settings.transcriptionMode,
+        speakerDiarization: this.settings.speakerDiarization,
+        wordTimestamps: this.settings.wordTimestamps,
+        customVocabulary: this.settings.customVocabulary,
+        languageCodes: this.settings.languageCodes,
+      },
       summarizeTranscript: this.settings.summarizeTranscript,
       enableCategoryClassification: this.settings.enableCategoryClassification,
       categories: this.settings.categories,
@@ -498,10 +508,18 @@ class TranscriptionSettingTab extends PluginSettingTab {
     }
   }
 
-  display(): void {
-    let { containerEl } = this;
-    containerEl.empty();
+  private displaySectionHeading(
+    containerEl: HTMLElement,
+    title: string,
+    description: string
+  ): void {
+    containerEl.createEl("hr", {
+      cls: "transcription-audio-setting-divider",
+    });
+    this.displayDescriptionBlock(containerEl, title, description);
+  }
 
+  private displayGeneralSettings(containerEl: HTMLElement): void {
     if (canUseSecretComponent(this.app)) {
       const secretSetting = new Setting(containerEl)
         .setName("API key")
@@ -524,23 +542,125 @@ class TranscriptionSettingTab extends PluginSettingTab {
             .setDisabled(true);
         });
     }
+  }
+
+  /**
+   * The options of the dedicated transcription model. Each one the API cannot
+   * combine with another is greyed out instead of hidden, with the reason in
+   * its description, so the user can see why it has no effect.
+   */
+  private displayTranscriptionSettings(containerEl: HTMLElement): void {
+    const settings = this.plugin.settings;
+    const smart = settings.transcriptionMode === "smart";
+    const vocabularyBlocked =
+      !smart && (settings.speakerDiarization || settings.wordTimestamps);
+
+    this.displaySectionHeading(
+      containerEl,
+      "Transcription",
+      "Audio is turned into a transcript by a dedicated speech-to-text model. It does not follow prompts; the options below are all that shape its output."
+    );
 
     new Setting(containerEl)
       .setName("Model")
-      .setDesc("Select the model to use for note-generation")
+      .setDesc(
+        "Recognizes 85+ languages and switches between them mid-recording. Recordings over 30 minutes are split into 20-minute chunks."
+      )
+      .addText((text) => {
+        text.setValue(settings.transcriptionModel).setDisabled(true);
+      });
+
+    new Setting(containerEl)
+      .setName("Mode")
+      .setDesc(
+        "Verbatim keeps fillers, repetitions and false starts. Smart removes them and tidies punctuation and lists, but cannot label speakers or add timestamps."
+      )
       .addDropdown((dropdown) => {
-        dropdown.addOptions(
-          MODELS.reduce((models: { [key: string]: string }, model) => {
-            models[model] = model;
-            return models;
-          }, {})
-        );
-        dropdown.setValue(this.plugin.settings.model);
+        dropdown.addOptions({ verbatim: "Verbatim", smart: "Smart" });
+        dropdown.setValue(settings.transcriptionMode);
         dropdown.onChange(async (value) => {
-          this.plugin.settings.model = value;
+          settings.transcriptionMode = value as TranscriptionMode;
           await this.plugin.saveSettings();
+          this.display();
         });
       });
+
+    new Setting(containerEl)
+      .setName("Speaker labels")
+      .setDesc(
+        (smart ? "Not available in Smart mode. " : "") +
+          "Starts a new paragraph for each speaker and labels it (up to 8 speakers; 3 or more is experimental). Labels restart in every chunk of a long recording, so Speaker 1 may change between chunks. Limits each request to 30 minutes."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(settings.speakerDiarization)
+          .setDisabled(smart)
+          .onChange(async (value) => {
+            settings.speakerDiarization = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Timestamps")
+      .setDesc(
+        (smart ? "Not available in Smart mode. " : "") +
+          "Starts each paragraph with its time in the recording. Limits each request to 30 minutes and may lower overall accuracy."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(settings.wordTimestamps)
+          .setDisabled(smart)
+          .onChange(async (value) => {
+            settings.wordTimestamps = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Custom vocabulary")
+      .setDesc(
+        (vocabularyBlocked
+          ? "Not used while speaker labels or timestamps are on. "
+          : "") +
+          `Names, product terms and jargon to recognize, one per line. Up to ${MAX_CUSTOM_VOCABULARY_TERMS.toLocaleString()} terms; works best with around 100.`
+      )
+      .addTextArea((text) => {
+        text.inputEl.classList.add("transcription-audio-setting-text-area");
+        text
+          .setPlaceholder("Obsidian\nGemini")
+          .setValue(settings.customVocabulary)
+          .setDisabled(vocabularyBlocked)
+          .onChange(async (value) => {
+            settings.customVocabulary = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Language hints")
+      .setDesc(
+        "Comma-separated BCP-47 codes such as ko-KR, en-US. Leave empty to detect the language automatically."
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("ko-KR, en-US")
+          .setValue(settings.languageCodes)
+          .onChange(async (value) => {
+            settings.languageCodes = value;
+            await this.plugin.saveSettings();
+          });
+      });
+  }
+
+  private displaySummarySection(containerEl: HTMLElement): void {
+    this.displaySectionHeading(
+      containerEl,
+      "Summary",
+      "Turns the transcript into a structured note with a general-purpose model."
+    );
 
     new Setting(containerEl)
       .setName("Summarize transcript")
@@ -555,10 +675,37 @@ class TranscriptionSettingTab extends PluginSettingTab {
           });
       });
 
-    if (this.plugin.settings.summarizeTranscript) {
-      this.displaySummarySettings(containerEl);
+    if (!this.plugin.settings.summarizeTranscript) {
+      return;
     }
 
+    new Setting(containerEl)
+      .setName("Model")
+      .setDesc("Select the model that writes the summary.")
+      .addDropdown((dropdown) => {
+        dropdown.addOptions(
+          MODELS.reduce((models: { [key: string]: string }, model) => {
+            models[model] = model;
+            return models;
+          }, {})
+        );
+        dropdown.setValue(this.plugin.settings.model);
+        dropdown.onChange(async (value) => {
+          this.plugin.settings.model = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    this.displaySummarySettings(containerEl);
+  }
+
+  display(): void {
+    let { containerEl } = this;
+    containerEl.empty();
+
+    this.displayGeneralSettings(containerEl);
+    this.displayTranscriptionSettings(containerEl);
+    this.displaySummarySection(containerEl);
     this.displayHistorySettings(containerEl);
   }
 }

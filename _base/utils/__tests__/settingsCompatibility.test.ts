@@ -85,6 +85,60 @@ describe("getCompatibleSettings", () => {
     expect(shouldSave).toBe(true);
   });
 
+  it("moves settings saved before the transcription options onto their defaults", () => {
+    const { settings, shouldSave } = getCompatibleSettings({
+      model: "gemini-3.7-flash",
+    });
+
+    expect(settings.transcriptionModel).toBe("gemini-3.5-transcribe");
+    expect(settings.transcriptionMode).toBe("verbatim");
+    expect(settings.speakerDiarization).toBe(false);
+    expect(settings.wordTimestamps).toBe(false);
+    expect(settings.customVocabulary).toBe("");
+    expect(settings.languageCodes).toBe("");
+    expect(shouldSave).toBe(false);
+  });
+
+  it("keeps saved transcription options", () => {
+    const saved = {
+      transcriptionModel: "gemini-3.5-transcribe",
+      transcriptionMode: "smart",
+      speakerDiarization: true,
+      wordTimestamps: true,
+      customVocabulary: "Obsidian",
+      languageCodes: "ko-KR",
+    } as const;
+    const { settings, shouldSave } = getCompatibleSettings(saved);
+
+    expect(settings).toMatchObject(saved);
+    expect(shouldSave).toBe(false);
+  });
+
+  it("replaces an unknown or mistyped transcription model", () => {
+    // "" was the "same as model" choice of an unreleased build.
+    for (const transcriptionModel of ["", "retired-transcribe", null, 3]) {
+      const { settings, shouldSave } = getCompatibleSettings({
+        transcriptionModel,
+      });
+
+      expect(settings.transcriptionModel).toBe("gemini-3.5-transcribe");
+      expect(shouldSave).toBe(true);
+    }
+  });
+
+  it("replaces an unknown or mistyped transcription option", () => {
+    const { settings, shouldSave } = getCompatibleSettings({
+      transcriptionMode: "fast",
+      speakerDiarization: "true",
+      customVocabulary: ["Obsidian"],
+    });
+
+    expect(settings.transcriptionMode).toBe("verbatim");
+    expect(settings.speakerDiarization).toBe(false);
+    expect(settings.customVocabulary).toBe("");
+    expect(shouldSave).toBe(true);
+  });
+
   it("keeps a deliberately emptied category list empty", () => {
     const { settings, shouldSave } = getCompatibleSettings({ categories: [] });
 

@@ -22,6 +22,7 @@ import {
 import { progressBus } from "../_base/utils/progressBus";
 import { toBlob } from "../_base/utils/blob";
 import { runWithConcurrency } from "../_base/utils/concurrency";
+import { TranscriptionOptions } from "../_base/services/transcription/transcriptionConfig";
 import {
   CHUNK_FAILED_PREFIX,
   CHUNK_PENDING_PREFIX,
@@ -35,7 +36,6 @@ import {
 import { ObsidianFileService } from "_base/services/obsidian/obsidianFileService";
 import { AudioService, WavHeader } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
-import { DEFAULT_TRANSCRIPTION_ONLY_PROMPT } from "_base/constants/setting";
 import { TranscriptionCategory } from "_base/types/setting";
 
 /** How long the classification/summarization steps wait for a manual retry. */
@@ -110,7 +110,9 @@ type ChunkRerunSession = {
   transcriptPath: string;
   /** Full plan including skipped ranges, so display numbering can be rebuilt. */
   chunks: PlannedChunk[];
+  /** The transcription model, the only one a re-run needs. */
   model: string;
+  transcriptionOptions: TranscriptionOptions;
   apiKey: string;
   uploadedFiles: (UploadedFileInfo | null)[];
   inFlight: Set<number>;
@@ -144,7 +146,11 @@ function readFrontmatterCategory(content: string): string | undefined {
 export interface TranscriptionRunOptions {
   apiKey: string | undefined;
   prompt: string;
+  /** Model for classification and summarization. */
   model: string;
+  /** Model for the transcription step. */
+  transcriptionModel: string;
+  transcriptionOptions: TranscriptionOptions;
   /** Whether the optional summarization step runs after transcription. */
   summarizeTranscript: boolean;
   enableCategoryClassification: boolean;
@@ -304,6 +310,8 @@ export class TranscriptionController {
       apiKey,
       prompt,
       model,
+      transcriptionModel,
+      transcriptionOptions,
       summarizeTranscript,
       enableCategoryClassification,
       categories,
@@ -389,7 +397,11 @@ export class TranscriptionController {
 
       progressBus.publish({
         stage: "model-selected",
-        model: model,
+        // The summary model only matters when a summary is made.
+        model:
+          summarizeTranscript && transcriptionModel !== model
+            ? `${transcriptionModel} → ${model}`
+            : transcriptionModel,
       });
 
       progressBus.publish({
@@ -570,13 +582,13 @@ export class TranscriptionController {
                 const transcriptionResult =
                   await this.transcriptionService.transcribe(
                   apiKey!,
-                  DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
                   {
                     kind: "upload",
                     blob: toBlob(audioBuffer, mimeType),
                     mimeType,
                   },
-                  model,
+                  transcriptionModel,
+                  transcriptionOptions,
                   6 * 60 * 1000,
                   () => {
                     progressBus.publish({ stage: "file-upload-start" });
@@ -607,8 +619,7 @@ export class TranscriptionController {
                       elapsedMs: apiRequestElapsedMs,
                     });
                   },
-                  abortController.signal,
-                  true
+                  abortController.signal
                 );
 
                 if (transcriptionResult.uploadedFile) {
@@ -680,7 +691,8 @@ export class TranscriptionController {
                 chunks: [
                   { startMs: 0, endMs: totalMs ?? 0, skipped: false },
                 ],
-                model,
+                model: transcriptionModel,
+                transcriptionOptions,
                 apiKey: apiKey!,
                 uploadedFiles: [wholeFileUpload],
                 inFlight: new Set<number>(),
@@ -754,7 +766,8 @@ export class TranscriptionController {
                         wavBlob: wavBlob!,
                         wavHeader: wavHeader!,
                         apiKey: apiKey!,
-                        model,
+                        model: transcriptionModel,
+                        transcriptionOptions,
                         chunkResults,
                         chunkUploadedFiles,
                         failedChunkIndices,
@@ -824,7 +837,8 @@ export class TranscriptionController {
                 audioPath: filePath,
                 transcriptPath: transcriptionFilePath,
                 chunks,
-                model,
+                model: transcriptionModel,
+                transcriptionOptions,
                 apiKey: apiKey!,
                 uploadedFiles: chunkUploadedFiles,
                 inFlight: new Set<number>(),
@@ -1247,6 +1261,7 @@ export class TranscriptionController {
     wavHeader: WavHeader;
     apiKey: string;
     model: string;
+    transcriptionOptions: TranscriptionOptions;
     chunkResults: string[];
     chunkUploadedFiles: (UploadedFileInfo | null)[];
     failedChunkIndices: number[];
@@ -1267,6 +1282,7 @@ export class TranscriptionController {
       wavHeader,
       apiKey,
       model,
+      transcriptionOptions,
       chunkResults,
       chunkUploadedFiles,
       failedChunkIndices,
@@ -1311,9 +1327,9 @@ export class TranscriptionController {
     try {
       const result = await this.transcriptionService.transcribe(
         apiKey,
-        DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
         { kind: "upload", blob: chunkBlob, mimeType: "audio/wav" },
         model,
+        transcriptionOptions,
         6 * 60 * 1000,
         () => {
           progressBus.publish({ stage: "file-upload-start", ...chunkContext });
@@ -1344,7 +1360,7 @@ export class TranscriptionController {
           });
         },
         abortSignal,
-        true
+        c.startMs
       );
 
       if (this.isDevMode) {
@@ -1746,9 +1762,9 @@ export class TranscriptionController {
 
       const result = await this.transcriptionService.transcribe(
         session.apiKey,
-        DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
         audio,
         session.model,
+        session.transcriptionOptions,
         6 * 60 * 1000,
         () => {
           progressBus.publish({ stage: "file-upload-start", ...chunkContext });
@@ -1772,7 +1788,7 @@ export class TranscriptionController {
           });
         },
         undefined,
-        true
+        range.startMs
       );
 
       if (result.uploadedFile) {
