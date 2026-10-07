@@ -2,6 +2,7 @@ import { DEFAULT_HISTORY_LIMIT } from "_base/constants/sessionHistory";
 import {
   AudioPluginSettings,
   TranscriptionCategory,
+  TranscriptionMode,
 } from "_base/types/setting";
 
 export const DEFAULT_BASIC_MODE_PROMPT =
@@ -31,21 +32,6 @@ export const DEFAULT_BASIC_MODE_PROMPT =
   "- Prefer clear headings, bullets, and short paragraphs.\n" +
   "\n" +
   "The following is the transcribed audio:\n\n";
-
-export const DEFAULT_TRANSCRIPTION_ONLY_PROMPT =
-  "Transcribe the following audio exactly as spoken. " +
-  "Output only the raw transcript text. " +
-  "Preserve the original language. " +
-  "Do not summarize, interpret, add commentary, or format with headings.\n\n" +
-  "Formatting rules:\n" +
-  "- Insert a line break (blank line) every time the speaker changes.\n" +
-  "- Each speaker's continuous speech must be on a single paragraph without line breaks.\n" +
-  "- Do not add speaker labels (e.g., 'Speaker 1:', 'Male:', 'Female:').\n" +
-  "- Do not add timestamps.\n\n" +
-  "Example output:\n" +
-  "I think we should go with option A. It makes more sense given the timeline.\n\n" +
-  "But what about the budget? We haven't checked the numbers yet.\n\n" +
-  "Right, let me pull up the spreadsheet and we can review it together.";
 
 const CATEGORY_PROMPT_BASE =
   "\n\nConstraints:\n" +
@@ -129,6 +115,12 @@ export const DEFAULT_CATEGORIES: TranscriptionCategory[] = [
 export const DEFAULT_SETTINGS: AudioPluginSettings = {
   summarizeTranscript: true,
   model: "gemini-3.8-flash",
+  transcriptionModel: "gemini-3.5-transcribe",
+  transcriptionMode: "verbatim",
+  speakerDiarization: false,
+  wordTimestamps: false,
+  customVocabulary: "",
+  languageCodes: "",
   secretApiKeyName: "",
   prompt: DEFAULT_BASIC_MODE_PROMPT,
   enableCategoryClassification: false,
@@ -147,6 +139,17 @@ export const MODELS: string[] = [
   "gemini-3.1-pro-preview",
   "gemini-3-flash-preview",
 ];
+
+/**
+ * Speech-to-text models served through the Interactions API. They return the
+ * transcript as-is and cannot follow a prompt, so they only ever transcribe.
+ */
+export const TRANSCRIPTION_MODELS: string[] = ["gemini-3.5-transcribe"];
+
+export const TRANSCRIPTION_MODES: TranscriptionMode[] = ["verbatim", "smart"];
+
+/** The API rejects a longer list; it works best with around 100 terms. */
+export const MAX_CUSTOM_VOCABULARY_TERMS = 1000;
 
 export const MODEL_MIGRATIONS: Record<string, string> = {
   "gemini-3-pro-preview": "gemini-3.1-pro-preview",

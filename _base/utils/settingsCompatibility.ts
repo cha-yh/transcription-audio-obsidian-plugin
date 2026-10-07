@@ -4,6 +4,8 @@ import {
   DEFAULT_SETTINGS,
   MODELS,
   MODEL_MIGRATIONS,
+  TRANSCRIPTION_MODELS,
+  TRANSCRIPTION_MODES,
 } from "_base/constants/setting";
 import { AudioPluginSettings, TranscriptionCategory } from "_base/types/setting";
 import { clampHistoryLimit } from "_base/utils/sessionSnapshot";
@@ -73,6 +75,12 @@ const PRIMITIVE_TYPES: Partial<
   autoPruneSessionHistory: "boolean",
   prompt: "string",
   model: "string",
+  transcriptionModel: "string",
+  transcriptionMode: "string",
+  speakerDiarization: "boolean",
+  wordTimestamps: "boolean",
+  customVocabulary: "string",
+  languageCodes: "string",
   secretApiKeyName: "string"
 };
 
@@ -196,6 +204,16 @@ export function getCompatibleSettings(saved: unknown): CompatibleSettings {
     ? migratedModel
     : DEFAULT_SETTINGS.model;
   if (settings.model !== previousModel) shouldSave = true;
+
+  if (!TRANSCRIPTION_MODELS.includes(settings.transcriptionModel)) {
+    settings.transcriptionModel = DEFAULT_SETTINGS.transcriptionModel;
+    shouldSave = true;
+  }
+
+  if (!TRANSCRIPTION_MODES.includes(settings.transcriptionMode)) {
+    settings.transcriptionMode = DEFAULT_SETTINGS.transcriptionMode;
+    shouldSave = true;
+  }
 
   return { settings, shouldSave };
 }

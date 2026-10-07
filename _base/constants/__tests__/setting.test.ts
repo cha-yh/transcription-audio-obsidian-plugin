@@ -4,8 +4,8 @@ import {
   DEFAULT_CATEGORIES,
   MODELS,
   MODEL_MIGRATIONS,
+  TRANSCRIPTION_MODELS,
   DEFAULT_BASIC_MODE_PROMPT,
-  DEFAULT_TRANSCRIPTION_ONLY_PROMPT,
   DEFAULT_CATEGORY_PROMPT_1ON1,
   DEFAULT_CATEGORY_PROMPT_TECH_MEETING,
   DEFAULT_CATEGORY_PROMPT_PROJECT,
@@ -38,6 +38,24 @@ describe("DEFAULT_SETTINGS", () => {
 
   it("model is a valid model from MODELS", () => {
     expect(MODELS).toContain(DEFAULT_SETTINGS.model);
+  });
+});
+
+describe("transcription model", () => {
+  it("transcribes with the dedicated model on the API's defaults", () => {
+    expect(DEFAULT_SETTINGS.transcriptionModel).toBe("gemini-3.5-transcribe");
+    expect(TRANSCRIPTION_MODELS).toContain(DEFAULT_SETTINGS.transcriptionModel);
+    expect(DEFAULT_SETTINGS.transcriptionMode).toBe("verbatim");
+    expect(DEFAULT_SETTINGS.speakerDiarization).toBe(false);
+    expect(DEFAULT_SETTINGS.wordTimestamps).toBe(false);
+    expect(DEFAULT_SETTINGS.customVocabulary).toBe("");
+    expect(DEFAULT_SETTINGS.languageCodes).toBe("");
+  });
+
+  it("keeps dedicated transcription models out of the summary model list", () => {
+    for (const model of TRANSCRIPTION_MODELS) {
+      expect(MODELS).not.toContain(model);
+    }
   });
 });
 
@@ -103,7 +121,6 @@ describe("MODEL_MIGRATIONS", () => {
 describe("Prompt constants", () => {
   it("all prompts are non-empty strings", () => {
     expect(DEFAULT_BASIC_MODE_PROMPT.length).toBeGreaterThan(0);
-    expect(DEFAULT_TRANSCRIPTION_ONLY_PROMPT.length).toBeGreaterThan(0);
     expect(DEFAULT_CATEGORY_PROMPT_1ON1.length).toBeGreaterThan(0);
     expect(DEFAULT_CATEGORY_PROMPT_TECH_MEETING.length).toBeGreaterThan(0);
     expect(DEFAULT_CATEGORY_PROMPT_PROJECT.length).toBeGreaterThan(0);

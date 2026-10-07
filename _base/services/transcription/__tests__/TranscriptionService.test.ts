@@ -5,7 +5,11 @@ import {
   isTranscriptionCancelledError,
   isTranscriptionQuotaError,
   TranscriptionService,
+  extractInteractionText,
+  extractInteractionUsage,
+  type TranscriptionAudioSource,
 } from "../TranscriptionService";
+import type { TranscriptionOptions } from "../transcriptionConfig";
 
 // Shared mock for generateContent
 const mockGenerateContent = vi.fn();
@@ -16,10 +20,9 @@ vi.mock("@google/genai", () => ({
     models = { generateContent: mockGenerateContent };
   },
   createUserContent: vi.fn((args: any) => args),
-  createPartFromUri: vi.fn((uri: string, mime: string) => ({ uri, mime })),
 }));
 
-// Mock global fetch for uploadFileResumable
+// Mock global fetch for uploadFileResumable and the Interactions API
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -144,25 +147,91 @@ describe("TranscriptionService", () => {
   const model = "gemini-3.7-flash";
 
   describe("transcribe", () => {
-    it("returns text, usage, and uploadedFile on success", async () => {
-      mockFileUpload();
-      mockGenerateContent.mockResolvedValueOnce({
-        text: "Hello world",
-        usageMetadata: { promptTokenCount: 10, totalTokenCount: 20 },
-      });
+    const transcribeModel = "gemini-3.5-transcribe";
+    const defaultOptions: TranscriptionOptions = {
+      transcriptionMode: "verbatim",
+      speakerDiarization: false,
+      wordTimestamps: false,
+      customVocabulary: "",
+      languageCodes: "",
+    };
+    const cachedFile = {
+      uri: "https://generativelanguage.googleapis.com/v1beta/files/abc",
+      mimeType: "audio/mp4",
+    };
 
-      const result = await service.transcribe(
+    function mockInteraction(body: unknown, status = 200) {
+      mockFetch.mockResolvedValueOnce({
+        ok: status === 200,
+        status,
+        statusText: status === 200 ? "OK" : "Error",
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+      });
+    }
+
+    function textResponse(text: string) {
+      return {
+        steps: [{ type: "model_output", content: [{ type: "text", text }] }],
+        usage: { total_input_tokens: 10, total_tokens: 20 },
+      };
+    }
+
+    function transcribe(
+      audio: TranscriptionAudioSource = audioSource(),
+      options: TranscriptionOptions = defaultOptions,
+      abortSignal?: AbortSignal,
+      offsetMs?: number
+    ) {
+      return service.transcribe(
         apiKey,
-        "prompt",
-        audioSource(),
-        model,
-        60000
+        audio,
+        transcribeModel,
+        options,
+        60000,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        abortSignal,
+        offsetMs
       );
+    }
+
+    it("uploads, then returns text, usage, and uploadedFile", async () => {
+      mockFileUpload();
+      mockInteraction(textResponse("Hello world"));
+
+      const result = await transcribe();
 
       expect(result.text).toBe("Hello world");
       expect(result.usage.promptTokenCount).toBe(10);
-      expect(result.uploadedFile).toBeDefined();
+      expect(result.usage.totalTokenCount).toBe(20);
       expect(result.uploadedFile!.uri).toBe("gs://bucket/file");
+      const [, init] = mockFetch.mock.calls[mockFetch.mock.calls.length - 1];
+      expect(JSON.parse(init.body).input[0].uri).toBe("gs://bucket/file");
+    });
+
+    it("calls the Interactions API with only the file at default options", async () => {
+      mockInteraction(textResponse("안녕"));
+
+      const result = await transcribe({ kind: "cached", file: cachedFile });
+
+      expect(result.text).toBe("안녕");
+      expect(result.uploadedFile).toEqual(cachedFile);
+      expect(mockGenerateContent).not.toHaveBeenCalled();
+
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe(
+        "https://generativelanguage.googleapis.com/v1beta/interactions"
+      );
+      expect(init.headers["x-goog-api-key"]).toBe(apiKey);
+      expect(JSON.parse(init.body)).toEqual({
+        model: "models/gemini-3.5-transcribe",
+        input: [
+          { type: "audio", uri: cachedFile.uri, mime_type: "audio/mp4" },
+        ],
+      });
     });
 
     // Regression test for issue #3: the upload path used Buffer.from() to turn
@@ -171,80 +240,95 @@ describe("TranscriptionService", () => {
     // (error serialisation) intact.
     it("uploads without Node's Buffer, as the mobile WebView has none", async () => {
       mockFileUpload();
-      mockGenerateContent.mockResolvedValueOnce({
-        text: "mobile ok",
-        usageMetadata: { totalTokenCount: 3 },
-      });
+      mockInteraction(textResponse("mobile ok"));
 
       const nodeBuffer = globalThis.Buffer;
       // @ts-expect-error deleting a Node global to emulate the mobile runtime
       delete globalThis.Buffer;
       try {
-        const result = await service.transcribe(
-          apiKey,
-          "prompt",
-          audioSource(),
-          model,
-          60000
-        );
+        const result = await transcribe();
         expect(result.text).toBe("mobile ok");
       } finally {
         globalThis.Buffer = nodeBuffer;
       }
     });
 
-    it("skips upload when cachedFile is provided", async () => {
-      mockGenerateContent.mockResolvedValueOnce({
-        text: "cached result",
-        usageMetadata: { totalTokenCount: 5 },
+    it("sends the transcription options and formats speakers from annotations", async () => {
+      mockInteraction({
+        steps: [
+          {
+            type: "model_output",
+            content: [
+              {
+                type: "text",
+                text: "안녕 네",
+                annotations: [
+                  {
+                    type: "word_info",
+                    text: "안녕",
+                    speaker: "spk_1",
+                    start_offset: "1.000s",
+                    end_offset: "1.400s",
+                  },
+                  {
+                    type: "word_info",
+                    text: "네",
+                    speaker: "spk_2",
+                    start_offset: "2.000s",
+                    end_offset: "2.200s",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
       });
 
-      const cachedFile = {
-        uri: "gs://bucket/cached",
-        mimeType: "audio/wav",
-        expirationTime: "2099-01-01T00:00:00Z",
-      };
-
-      const result = await service.transcribe(
-        apiKey,
-        "prompt",
+      const result = await transcribe(
         { kind: "cached", file: cachedFile },
-        model,
-        60000
+        {
+          ...defaultOptions,
+          speakerDiarization: true,
+          wordTimestamps: true,
+          languageCodes: "ko-KR",
+        },
+        undefined,
+        60_000
       );
 
-      expect(result.text).toBe("cached result");
-      expect(mockFetch).not.toHaveBeenCalled();
+      expect(result.text).toBe(
+        "[01:01] **Speaker 1:** 안녕\n\n[01:02] **Speaker 2:** 네"
+      );
+      const [, init] = mockFetch.mock.calls[0];
+      expect(JSON.parse(init.body).generation_config).toEqual({
+        transcription_config: {
+          language_codes: ["ko-KR"],
+          mode: {
+            type: "verbatim",
+            diarization_mode: "speaker",
+            timestamp_granularities: ["word"],
+          },
+        },
+      });
     });
 
-    it("passes thinkingBudget: 0 when disableThinking is true", async () => {
-      mockFileUpload();
-      mockGenerateContent.mockResolvedValueOnce({
-        text: "result",
-        usageMetadata: {},
-      });
+    it("falls back to the plain text when speakers were asked for but no annotations came back", async () => {
+      mockInteraction({ output_text: "plain" });
 
-      await service.transcribe(
-        apiKey,
-        "prompt",
-        audioSource(),
-        model,
-        60000,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        true // disableThinking
+      const result = await transcribe(
+        { kind: "cached", file: cachedFile },
+        { ...defaultOptions, speakerDiarization: true }
       );
 
-      expect(mockGenerateContent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({
-            thinkingConfig: { thinkingBudget: 0 },
-          }),
-        })
-      );
+      expect(result.text).toBe("plain");
+    });
+
+    it("fails when the model returns no text", async () => {
+      mockInteraction({ steps: [] });
+
+      await expect(
+        transcribe({ kind: "cached", file: cachedFile })
+      ).rejects.toThrow("No text response from model");
     });
 
     it("throws TranscriptionCancelledError when signal is aborted", async () => {
@@ -252,67 +336,39 @@ describe("TranscriptionService", () => {
       abortController.abort();
 
       await expect(
-        service.transcribe(
-          apiKey,
-          "prompt",
-          audioSource(),
-          model,
-          60000,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          abortController.signal
-        )
+        transcribe(audioSource(), defaultOptions, abortController.signal)
       ).rejects.toThrow(TranscriptionCancelledError);
     });
 
-    it("wraps 429 errors as TranscriptionQuotaError", async () => {
-      mockFileUpload();
-      mockGenerateContent.mockRejectedValueOnce(
-        new Error("429 Too Many Requests")
+    it("reports a quota response as TranscriptionQuotaError", async () => {
+      mockInteraction(
+        { error: { code: 429, status: "RESOURCE_EXHAUSTED" } },
+        429
       );
 
       await expect(
-        service.transcribe(
-          apiKey,
-          "prompt",
-          audioSource(),
-          model,
-          60000
-        )
-      ).rejects.toThrow(TranscriptionQuotaError);
+        transcribe({ kind: "cached", file: cachedFile })
+      ).rejects.toBeInstanceOf(TranscriptionQuotaError);
     });
 
-    it("wraps RESOURCE_EXHAUSTED errors as TranscriptionQuotaError", async () => {
-      mockFileUpload();
-      mockGenerateContent.mockRejectedValueOnce(
-        new Error("RESOURCE_EXHAUSTED: quota exceeded")
-      );
+    it("throws a non-quota failure with the response body", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        text: async () => "INVALID_ARGUMENT",
+      });
 
       await expect(
-        service.transcribe(
-          apiKey,
-          "prompt",
-          audioSource(),
-          model,
-          60000
-        )
-      ).rejects.toThrow(TranscriptionQuotaError);
+        transcribe({ kind: "cached", file: cachedFile })
+      ).rejects.toThrow("400 Bad Request INVALID_ARGUMENT");
     });
 
-    it("throws original error for non-quota failures", async () => {
-      mockFileUpload();
-      mockGenerateContent.mockRejectedValueOnce(new Error("Network failure"));
+    it("throws the original error for a network failure", async () => {
+      mockFetch.mockRejectedValueOnce(new Error("Network failure"));
 
       await expect(
-        service.transcribe(
-          apiKey,
-          "prompt",
-          audioSource(),
-          model,
-          60000
-        )
+        transcribe({ kind: "cached", file: cachedFile })
       ).rejects.toThrow("Network failure");
     });
 
@@ -320,9 +376,9 @@ describe("TranscriptionService", () => {
       await expect(
         service.transcribe(
           "",
-          "prompt",
           audioSource(),
-          model,
+          transcribeModel,
+          defaultOptions,
           60000
         )
       ).rejects.toThrow("API Key is not provided");
@@ -335,23 +391,14 @@ describe("TranscriptionService", () => {
         type: "audio/wav",
       });
       mockFileUpload({ chunks: 3 });
-      mockGenerateContent.mockResolvedValueOnce({
-        text: "long",
-        usageMetadata: {},
-      });
+      mockInteraction(textResponse("long"));
 
-      await service.transcribe(
-        apiKey,
-        "prompt",
-        { kind: "upload", blob, mimeType: "audio/wav" },
-        model,
-        60000
-      );
+      await transcribe({ kind: "upload", blob, mimeType: "audio/wav" });
 
-      // one start request plus one per part
-      expect(mockFetch).toHaveBeenCalledTimes(4);
+      // one start request, one per part, then the transcription request
+      expect(mockFetch).toHaveBeenCalledTimes(5);
 
-      const uploadCalls = mockFetch.mock.calls.slice(1);
+      const uploadCalls = mockFetch.mock.calls.slice(1, 4);
       expect(
         uploadCalls.map((call) => call[1].headers["X-Goog-Upload-Offset"])
       ).toEqual(["0", "8388608", "16777216"]);
@@ -365,9 +412,7 @@ describe("TranscriptionService", () => {
       // up here rather than somewhere further down the upload.
       mockFileUpload({ exposeUploadUrl: false });
 
-      await expect(
-        service.transcribe(apiKey, "prompt", audioSource(), model, 60000)
-      ).rejects.toThrow("upload URL not found");
+      await expect(transcribe()).rejects.toThrow("upload URL not found");
     });
 
     it("reports a chunk that is not acknowledged as active", async () => {
@@ -387,13 +432,7 @@ describe("TranscriptionService", () => {
         });
 
       await expect(
-        service.transcribe(
-          apiKey,
-          "prompt",
-          { kind: "upload", blob, mimeType: "audio/wav" },
-          model,
-          60000
-        )
+        transcribe({ kind: "upload", blob, mimeType: "audio/wav" })
       ).rejects.toThrow("unexpected upload status");
     });
   });
@@ -432,6 +471,53 @@ describe("TranscriptionService", () => {
 
       expect(result.text).toBe("Summary of the meeting...");
       expect(result.usage.totalTokenCount).toBe(15);
+    });
+  });
+});
+
+describe("extractInteractionText", () => {
+  it("prefers output_text when the response carries it", () => {
+    expect(extractInteractionText({ output_text: "whole", steps: [] })).toBe(
+      "whole"
+    );
+  });
+
+  it("joins the text parts of model output steps only", () => {
+    expect(
+      extractInteractionText({
+        steps: [
+          { type: "user_input", content: [{ type: "text", text: "no" }] },
+          {
+            type: "model_output",
+            content: [
+              { type: "text", text: "Hello " },
+              { type: "audio" },
+              { type: "text", text: "world" },
+            ],
+          },
+        ],
+      })
+    ).toBe("Hello world");
+  });
+
+  it("returns an empty string for a response without text", () => {
+    expect(extractInteractionText({})).toBe("");
+    expect(extractInteractionText(null)).toBe("");
+  });
+});
+
+describe("extractInteractionUsage", () => {
+  it("maps the usage counts it recognizes and leaves the rest undefined", () => {
+    expect(
+      extractInteractionUsage({
+        usage: { total_input_tokens: 7, total_tokens: "12" },
+      })
+    ).toEqual({
+      promptTokenCount: 7,
+      candidatesTokenCount: undefined,
+      thoughtsTokenCount: undefined,
+      toolUsePromptTokenCount: undefined,
+      totalTokenCount: undefined,
     });
   });
 });
