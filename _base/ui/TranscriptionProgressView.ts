@@ -40,6 +40,8 @@ function indicatorStatusOf(
 }
 /** Above this many chunks the number labels collide, so they are dropped. */
 const MAX_SPARKLINE_LABELS = 8;
+const SHOW_LOGS_LABEL = "Show logs";
+const HIDE_LOGS_LABEL = "Hide logs";
 
 type SparklineChunk = PersistedSparklineChunk;
 type SparklineData = PersistedSparkline;
@@ -59,17 +61,11 @@ interface SessionRefs {
   /** Chunk re-run buttons under the sparkline, refreshed when they go stale. */
   chunkRerunButtonEls: HTMLButtonElement[];
   fileNameEl: HTMLAnchorElement;
-  fileSizeEl: HTMLElement;
-  statusEl: HTMLElement;
   targetFileEl: HTMLAnchorElement;
-  modelEl: HTMLElement;
   categoryRowEl: HTMLElement;
   categoryEl: HTMLElement;
   transcriptRowEl: HTMLElement;
   transcriptFileEl: HTMLAnchorElement;
-  chunkWrapEl?: HTMLElement;
-  chunkBarEl?: HTMLProgressElement;
-  chunkLabelEl?: HTMLElement;
   logEl: HTMLElement;
   latestLogEl: HTMLElement;
   detailButtonEl: HTMLButtonElement;
@@ -79,7 +75,7 @@ interface SessionRefs {
 }
 
 /**
- * Flat on purpose: `session.statusEl` and `session.logHistory` are read in
+ * Flat on purpose: `session.statusText` and `session.logHistory` are read in
  * well over a hundred places, and nesting the state would rename every one of
  * them for no behavioural gain.
  */
@@ -429,7 +425,7 @@ export class TranscriptionProgressView extends ItemView {
     });
 
     const width = 100;
-    const height = 20;
+    const height = 32;
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     svg.setAttribute("preserveAspectRatio", "none");
@@ -440,8 +436,10 @@ export class TranscriptionProgressView extends ItemView {
       const barWidth = width / count;
       data.buckets.forEach((value, index) => {
         const clamped = Math.max(0, Math.min(1, value));
+        // Square root lifts the low ratios sparse speech produces (~10-30%)
+        // into visible bars while keeping 0 and 1 where they were.
         // Keep a 1px stub for empty buckets so the timeline stays readable
-        const barHeight = Math.max(0.75, clamped * height);
+        const barHeight = Math.max(1, Math.sqrt(clamped) * height);
         const rect = document.createElementNS(SVG_NS, "rect");
         rect.setAttribute("x", `${index * barWidth}`);
         rect.setAttribute("y", `${height - barHeight}`);
@@ -687,17 +685,6 @@ export class TranscriptionProgressView extends ItemView {
       fileNameEl.classList.add("is-disabled");
     }
 
-    const row2 = infoEl.createEl("div", { cls: "transcription-audio-row" });
-    row2.createEl("span", { text: "Size: ", cls: "transcription-audio-label" });
-    const fileSizeEl = row2.createEl("span", { text: state.fileSizeText });
-
-    const row3 = infoEl.createEl("div", { cls: "transcription-audio-row" });
-    row3.createEl("span", {
-      text: "Status: ",
-      cls: "transcription-audio-label",
-    });
-    const statusEl = row3.createEl("span", { text: state.statusText });
-
     const row4 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row4.createEl("span", {
       text: "Target: ",
@@ -717,13 +704,6 @@ export class TranscriptionProgressView extends ItemView {
     } else {
       targetFileEl.classList.add("is-disabled");
     }
-
-    const row5 = infoEl.createEl("div", { cls: "transcription-audio-row" });
-    row5.createEl("span", {
-      text: "Model: ",
-      cls: "transcription-audio-label",
-    });
-    const modelEl = row5.createEl("span", { text: state.modelText });
 
     const row6 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row6.createEl("span", {
@@ -765,7 +745,7 @@ export class TranscriptionProgressView extends ItemView {
       cls: "transcription-audio-latest-log-text",
     });
     const detailButtonEl = statusBarEl.createEl("button", {
-      text: state.isLogExpanded ? "close" : "detail",
+      text: state.isLogExpanded ? HIDE_LOGS_LABEL : SHOW_LOGS_LABEL,
       cls: "transcription-audio-detail-button",
     });
     const cancelButtonEl = statusBarEl.createEl("button", {
@@ -784,10 +764,7 @@ export class TranscriptionProgressView extends ItemView {
       closeButtonEl,
       chunkRerunButtonEls: [],
       fileNameEl,
-      fileSizeEl,
-      statusEl,
       targetFileEl,
-      modelEl,
       categoryRowEl: row6,
       categoryEl,
       transcriptRowEl: row7,
@@ -801,9 +778,6 @@ export class TranscriptionProgressView extends ItemView {
     }) as TranscriptionSession;
 
     this.updateIndicator(session, indicatorStatusOf(state.status));
-    if (state.chunkLabelText !== undefined) {
-      this.ensureChunkUi(session);
-    }
     if (state.isLogExpanded) {
       this.renderLogHistory(session);
     }
@@ -857,21 +831,6 @@ export class TranscriptionProgressView extends ItemView {
     });
   }
 
-  /** Chunk progress only appears once a run reports its first chunk. */
-  private ensureChunkUi(session: TranscriptionSession): void {
-    if (session.chunkWrapEl) return;
-
-    session.chunkWrapEl = session.sessionEl.createEl("div", {
-      cls: "transcription-audio-chunks",
-    });
-    session.chunkLabelEl = session.chunkWrapEl.createEl("div", {
-      text: session.chunkLabelText ?? "Chunk: -",
-    });
-    session.chunkBarEl = session.chunkWrapEl.createEl("progress");
-    session.chunkBarEl.max = session.chunkBarMax;
-    session.chunkBarEl.value = session.chunkBarValue;
-  }
-
   private createNewSession(): TranscriptionSession {
     if (this.currentSession) {
       // The controller keeps retry context for the most recent run only, so
@@ -907,7 +866,7 @@ export class TranscriptionProgressView extends ItemView {
     session.logHistory.forEach((entry) => {
       this.renderLogLine(session, entry);
     });
-    session.detailButtonEl.setText("close");
+    session.detailButtonEl.setText(HIDE_LOGS_LABEL);
   }
 
   private toggleLogHistory(session: TranscriptionSession): void {
@@ -918,7 +877,7 @@ export class TranscriptionProgressView extends ItemView {
     } else {
       // Collapse: hide history
       session.logHistoryEl.style.display = "none";
-      session.detailButtonEl.setText("detail");
+      session.detailButtonEl.setText(SHOW_LOGS_LABEL);
     }
   }
 
@@ -976,10 +935,12 @@ export class TranscriptionProgressView extends ItemView {
    * Every one of these writes the state field beside the DOM node. Skipping
    * the state half is how a value ends up visible but unsaved, which is the
    * bug this whole feature exists to fix.
+   *
+   * Status, size, model and chunk progress are no longer drawn on the card,
+   * but they stay in the saved record so older records still load unchanged.
    */
   private setStatus(session: TranscriptionSession, text: string): void {
     session.statusText = text;
-    session.statusEl.setText(text);
   }
 
   private setLatestLog(session: TranscriptionSession, text: string): void {
@@ -989,12 +950,10 @@ export class TranscriptionProgressView extends ItemView {
 
   private setFileSize(session: TranscriptionSession, bytes: number): void {
     session.fileSizeText = formatBytes(bytes);
-    session.fileSizeEl.setText(session.fileSizeText);
   }
 
   private setModel(session: TranscriptionSession, model: string): void {
     session.modelText = model;
-    session.modelEl.setText(model);
   }
 
   private setCategory(session: TranscriptionSession, category: string): void {
@@ -1047,12 +1006,6 @@ export class TranscriptionProgressView extends ItemView {
     session.chunkBarMax = max;
     session.chunkBarValue = value;
     session.chunkLabelText = labelText;
-    this.ensureChunkUi(session);
-    if (session.chunkBarEl) {
-      session.chunkBarEl.max = max;
-      session.chunkBarEl.value = value;
-    }
-    session.chunkLabelEl?.setText(labelText);
   }
 
   private setCancelState(
@@ -1715,7 +1668,7 @@ export class TranscriptionProgressView extends ItemView {
         this.setStatus(this.currentSession, "Failed");
         // Show short summary in status bar, full message in log detail
         this.pushLog(
-          "API request failed - click detail for more",
+          "API request failed - show logs for more",
           `Failed: ${e.message}`,
           this.currentSession
         );
