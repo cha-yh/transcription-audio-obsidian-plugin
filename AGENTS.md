@@ -11,6 +11,7 @@ Use Yarn 4 for package scripts.
 - `yarn install`: install dependencies from `yarn.lock`.
 - `yarn dev`: run esbuild in watch mode for local development.
 - `yarn dev:test`: run watch mode with a test manifest suffix.
+- `yarn deploy:test`: type-check, build once for production and copy it into the vault as the `-test` plugin.
 - `yarn build`: type-check with `tsc` and build the production bundle.
 - `yarn test`: run Vitest once.
 - `yarn test:watch`: run Vitest in watch mode.
@@ -21,6 +22,8 @@ Use Yarn 4 for package scripts.
 - `yarn version`: update `manifest.json` and `versions.json` during release prep.
 
 For local Obsidian testing, set `OBSIDIAN_PLUGINS_PATH` in `.env.local`; optional `OBSIDIAN_PLUGIN_DIR`, `OBSIDIAN_TEST_ID_SUFFIX`, and `OBSIDIAN_TEST_NAME_SUFFIX` customize copied plugin output.
+
+During development, put builds into the vault with `yarn deploy:test` and nothing else. The vault runs the `-test` plugin (`transcription-audio-test`, shown as "Transcription Audio TEST"); the plain `transcription-audio` folder is not enabled there, so a build copied into it never shows up in Obsidian. `yarn build` does not copy at all — it only reads `.env.production` — and a build without `--test-manifest` lands in that disabled folder.
 
 ## Coding Style & Naming Conventions
 
