@@ -1,25 +1,26 @@
 # Transcription Audio(Beta) Plugin for Obsidian
 
-Turn your audio into structured Markdown notes inside Obsidian. This plugin detects an audio file linked in your current note, transcribes it with Gemini's dedicated speech-to-text model, optionally summarizes the transcript, and inserts the result back into your note. A right-hand progress panel shows what’s happening step by step.
+Turn your audio into structured Markdown notes inside Obsidian. This plugin detects an audio file linked in your current note, transcribes it with Gemini's dedicated speech-to-text model, optionally summarizes the transcript, and links the transcript and embeds the summary back into your note. A right-hand progress panel shows what’s happening step by step.
 
 ## Features
 
-- Smart audio detection from links or embeds in the active note
+- Smart audio detection from links or embeds in the active note, or transcribe an open audio file directly
 - Transcription with Google's dedicated speech-to-text model (`gemini-3.5-transcribe`), with optional speaker labels, timestamps, custom vocabulary and language hints
-- Optional summarization of the transcript with a Gemini model of your choice, with category-specific prompts, saved to its own summary file
-- Long-audio transcription with time-based chunking and chunk retry handling
+- Optional summarization of the transcript with a Gemini model of your choice, with category-specific prompts, saved to its own summary file and embedded in the note
+- "Summarize transcript" command to summarize an existing transcript, from the transcript file or a note that links it
+- Long-audio transcription with speech-aware chunking and per-chunk retry
 - Reusable transcript file creation and transcript file links
 - Progress panel (sidebar) with live status:
-  - Detected audio filename and size
-  - Audio preparation status
-  - API request start/completion times
+  - Links to the audio, target note, transcript and summary files
+  - Speech chart with each chunk's upload and transcription status, and Retry for failed chunks
+  - Timestamped log of every step, folded inside the progress area
   - Gemini usage logs (prompt/output/total tokens, plus cached tokens when the API reports them; the transcription model reports its output as 0)
   - Classification and summarization status, with the prompt that was sent; edit it and summarize again from the panel
   - Cancel button to stop upload/API request in progress
   - Success/error result
   - Records kept across plugin reloads and updates, each stamped with when the run started and removable individually
   - "Open progress panel" command reopens the panel with those records, without starting a transcription
-- Writes the final output to the file and cursor position where you started the command
+- Writes the transcript link and summary embed at the cursor where you started the command
 
 ## Requirements
 
@@ -74,8 +75,8 @@ Run history:
 2. Place the cursor after the link.
 3. Run the command: "Transcribe audio".
    <img alt="Image" src="https://github.com/user-attachments/assets/254e3621-4733-4961-ab90-ce58792d6cc6" />
-4. A progress panel will automatically open in the right sidebar, showing real-time status updates including file upload progress, API request status, and transcription progress.
-   <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
+4. A progress panel will automatically open in the right sidebar, showing each chunk's upload and transcription, then classification and summarization. Click a run's status row to fold its progress area and log.
+   <img height="300" alt="Progress panel" src="https://github.com/user-attachments/assets/96f0586a-989e-4bb8-8e4e-02e55cfaf412" />
 5. When complete, a link to the transcript file is inserted at your starting cursor position. When `Summarize after transcription` is on, the summary is written to its own file next to the transcript (`_summary_<audio name>_<time>.md`) and embedded under the link, e.g. `![[_summary_Recording_2026-10-12T00-23-21#Summary]]`.
 
 To summarize an existing transcript, run "Summarize transcript" in either of two places. Its progress and log appear in the panel like any other run.
