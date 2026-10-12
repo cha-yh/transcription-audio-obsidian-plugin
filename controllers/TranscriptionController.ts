@@ -37,6 +37,13 @@ import { ObsidianFileService } from "_base/services/obsidian/obsidianFileService
 import { AudioService, WavHeader } from "../_base/services/audio/AudioService";
 import { AUDIO_FILE_REGEX } from "_base/constants/regex";
 import { TranscriptionCategory } from "_base/types/setting";
+import type { ProgressEvent } from "_base/types/progress";
+import {
+  buildSummaryContent,
+  readTranscriptBody,
+  summaryEmbed,
+  summaryFilePath,
+} from "_base/utils/summaryFile";
 
 /** How long the classification/summarization steps wait for a manual retry. */
 const RETRY_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -180,11 +187,23 @@ export class TranscriptionController {
   private rerunSession: ChunkRerunSession | null = null;
   private unsubscribeRerun: () => void;
 
-  constructor(private app: App, private progressViewType: string) {
+  constructor(
+    private app: App,
+    private progressViewType: string,
+    /**
+     * Current settings as run options, for work the panel starts on its own
+     * (summarizing again) rather than through a command.
+     */
+    private getRunOptions?: () => TranscriptionRunOptions
+  ) {
     this.isDevMode = progressViewType.includes("-test");
     this.unsubscribeRerun = progressBus.subscribe((event) => {
       if (event.stage === "chunk-rerun-requested") {
         void this.rerunChunk(event.chunkIndex);
+      } else if (event.stage === "summary-rerun-requested") {
+        void this.resummarize(event);
+      } else if (event.stage === "summary-finish-requested") {
+        void this.finishSummary(event);
       }
     });
   }
@@ -888,73 +907,27 @@ export class TranscriptionController {
           // fail, and asking the model to summarize an empty transcript bills
           // two requests to invent one.
           const transcriptForModel = stripChunkMarkers(rawTranscript);
-          let transcript: string;
-          if (!summarize || transcriptForModel.length === 0) {
-            transcript = transcriptionLink;
-          } else {
-            // Step 2: Classify transcript into a category when enabled
-            let detectedCategory: string = "";
-            let categoryPrompt: string = "";
-
-            const hasEnabledCategories = categories.some((c) => c.enabled);
-
-            if (!enableCategoryClassification) {
-              // No classification — the default prompt summarizes everything
-              categoryPrompt = prompt;
-            } else if (existingTranscript?.category && hasEnabledCategories) {
-              // Reuse category from existing transcription file
-              detectedCategory = existingTranscript.category;
-              progressBus.publish({ stage: "classification-step-start" });
-              progressBus.publish({
-                stage: "classification-step-complete",
-                elapsedMs: 0,
-                category: detectedCategory,
-              });
-            } else if (hasEnabledCategories) {
-              detectedCategory = await this.runClassificationWithRetry(
-                apiKey!,
-                transcriptForModel,
-                categories,
-                model,
-                transcriptionFilePath,
-                abortController.signal,
-                publishUsage
-              );
-            } else {
-              detectedCategory = "";
-            }
-
-            // Resolve prompt: category prompt or fallback to user prompt
-            if (!categoryPrompt) {
-              if (detectedCategory && hasEnabledCategories) {
-                const matchedCategory = categories.find(
-                  (c) =>
-                    c.enabled &&
-                    c.name.toLowerCase() === detectedCategory.toLowerCase()
-                );
-                categoryPrompt = matchedCategory
-                  ? matchedCategory.prompt
-                  : prompt;
-              } else {
-                categoryPrompt = prompt;
-              }
-            }
-
-            // Step 3: Summarization using category prompt
-            const summarized = await this.runSummarizationWithRetry(
-              apiKey!,
-              categoryPrompt,
-              transcriptForModel,
-              model,
-              abortController.signal,
-              publishUsage
-            );
+          let transcript = transcriptionLink;
+          if (
+            summarize &&
+            transcriptForModel.length > 0 &&
+            transcriptionFilePath
+          ) {
+            const summaryPath = await this.runSummaryPipeline({
+              apiKey: apiKey!,
+              options,
+              transcriptText: transcriptForModel,
+              transcriptPath: transcriptionFilePath,
+              audioPath: filePath,
+              knownCategory: existingTranscript?.category,
+              abortSignal: abortController.signal,
+              publishUsage,
+            });
 
             throwIfCancelled();
 
-            transcript = transcriptionLink
-              ? `${transcriptionLink}\n\n${summarized}`
-              : summarized;
+            // The summary lives in its own file; the note embeds its section
+            transcript = `${transcriptionLink}\n\n${summaryEmbed(summaryPath)}`;
           }
 
           throwIfCancelled();
@@ -1044,7 +1017,9 @@ export class TranscriptionController {
     model: string,
     transcriptPath: string | null,
     abortSignal: AbortSignal,
-    publishUsage: (result: TranscriptionResult) => void
+    publishUsage: (result: TranscriptionResult) => void,
+    /** Off when nothing waits on a panel retry; the failure then throws. */
+    waitForRetry = true
   ): Promise<string> {
     const enabledCategories = categories.filter((c) => c.enabled);
     const categoryNames = enabledCategories.map((c) => c.name);
@@ -1110,6 +1085,7 @@ export class TranscriptionController {
         stage: "classification-step-failed",
         message: e instanceof Error ? e.message : String(e),
       });
+      if (!waitForRetry) throw e;
 
       return await this.waitForRetryEvent(
         "classification-retry-requested",
@@ -1118,42 +1094,152 @@ export class TranscriptionController {
     }
   }
 
+  /**
+   * Steps 2 and 3 for a transcript that already exists: classify when
+   * enabled, summarize with the matching prompt, and write the summary file.
+   * Shared by a transcription run and the summarize command.
+   */
+  private async runSummaryPipeline(params: {
+    apiKey: string;
+    options: TranscriptionRunOptions;
+    transcriptText: string;
+    transcriptPath: string;
+    audioPath?: string;
+    /** A category the transcript file already holds, reused as is. */
+    knownCategory?: string;
+    abortSignal: AbortSignal;
+    publishUsage: (result: TranscriptionResult) => void;
+    /** Wait for a panel retry on failure instead of throwing. Default on. */
+    waitForRetry?: boolean;
+  }): Promise<string> {
+    const { prompt, model, enableCategoryClassification, categories } =
+      params.options;
+    const waitForRetry = params.waitForRetry ?? true;
+    let detectedCategory = "";
+    let categoryPrompt = "";
+
+    const hasEnabledCategories = categories.some((c) => c.enabled);
+
+    if (!enableCategoryClassification) {
+      // No classification — the default prompt summarizes everything
+      categoryPrompt = prompt;
+    } else if (params.knownCategory && hasEnabledCategories) {
+      // Reuse category from existing transcription file
+      detectedCategory = params.knownCategory;
+      progressBus.publish({ stage: "classification-step-start" });
+      progressBus.publish({
+        stage: "classification-step-complete",
+        elapsedMs: 0,
+        category: detectedCategory,
+      });
+    } else if (hasEnabledCategories) {
+      detectedCategory = await this.runClassificationWithRetry(
+        params.apiKey,
+        params.transcriptText,
+        categories,
+        model,
+        params.transcriptPath,
+        params.abortSignal,
+        params.publishUsage,
+        waitForRetry
+      );
+    }
+
+    // Resolve prompt: category prompt or fallback to user prompt
+    if (!categoryPrompt) {
+      const matchedCategory = detectedCategory
+        ? categories.find(
+            (c) =>
+              c.enabled &&
+              c.name.toLowerCase() === detectedCategory.toLowerCase()
+          )
+        : undefined;
+      categoryPrompt = matchedCategory ? matchedCategory.prompt : prompt;
+    }
+
+    const summarized = await this.runSummarizationWithRetry(
+      params.apiKey,
+      categoryPrompt,
+      params.transcriptText,
+      model,
+      params.abortSignal,
+      params.publishUsage,
+      waitForRetry
+    );
+
+    return this.writeSummaryFile({
+      transcriptPath: params.transcriptPath,
+      audioPath: params.audioPath,
+      category: detectedCategory,
+      summary: summarized,
+    });
+  }
+
+  /** One summarization request, reported as a step. Failure is the caller's. */
+  private async summarizeOnce(
+    apiKey: string,
+    prompt: string,
+    transcriptText: string,
+    model: string,
+    abortSignal: AbortSignal,
+    publishUsage: (result: TranscriptionResult) => void
+  ): Promise<string> {
+    const stepStart = performance.now();
+    progressBus.publish({ stage: "summarization-step-start", prompt });
+
+    const result = await this.transcriptionService.summarizeText(
+      apiKey,
+      prompt,
+      transcriptText,
+      model,
+      6 * 60 * 1000,
+      () => progressBus.publish({ stage: "api-request-start" }),
+      (ms) =>
+        progressBus.publish({
+          stage: "api-request-complete",
+          elapsedMs: ms,
+        }),
+      abortSignal
+    );
+
+    publishUsage(result);
+
+    progressBus.publish({
+      stage: "summarization-step-complete",
+      elapsedMs: Math.round(performance.now() - stepStart),
+    });
+
+    return result.text;
+  }
+
   private async runSummarizationWithRetry(
     apiKey: string,
     categoryPrompt: string,
     rawTranscript: string,
     model: string,
     abortSignal: AbortSignal,
-    publishUsage: (result: TranscriptionResult) => void
+    publishUsage: (result: TranscriptionResult) => void,
+    /** Off when nothing waits on a panel retry; the failure then throws. */
+    waitForRetry = true
   ): Promise<string> {
-    const attempt = async (): Promise<string> => {
-      const stepStart = performance.now();
-      progressBus.publish({ stage: "summarization-step-start" });
-
-      const result = await this.transcriptionService.summarizeText(
+    // A retry from the panel may carry an edited prompt, which then sticks
+    let currentPrompt = categoryPrompt;
+    const attempt = (event?: ProgressEvent): Promise<string> => {
+      if (
+        event?.stage === "summarization-retry-requested" &&
+        event.prompt !== undefined &&
+        event.prompt.trim().length > 0
+      ) {
+        currentPrompt = event.prompt;
+      }
+      return this.summarizeOnce(
         apiKey,
-        categoryPrompt,
+        currentPrompt,
         rawTranscript,
         model,
-        6 * 60 * 1000,
-        () => progressBus.publish({ stage: "api-request-start" }),
-        (ms) =>
-          progressBus.publish({
-            stage: "api-request-complete",
-            elapsedMs: ms,
-          }),
-        abortSignal
+        abortSignal,
+        publishUsage
       );
-
-      publishUsage(result);
-
-      const elapsedMs = Math.round(performance.now() - stepStart);
-      progressBus.publish({
-        stage: "summarization-step-complete",
-        elapsedMs,
-      });
-
-      return result.text;
     };
 
     // First attempt
@@ -1167,6 +1253,7 @@ export class TranscriptionController {
         stage: "summarization-step-failed",
         message: e instanceof Error ? e.message : String(e),
       });
+      if (!waitForRetry) throw e;
 
       return await this.waitForRetryEvent(
         "summarization-retry-requested",
@@ -1175,9 +1262,326 @@ export class TranscriptionController {
     }
   }
 
+  /**
+   * Writes the summary next to its transcript. Rewrites `summaryPath` in place
+   * when it still exists, so a note already embedding it shows the new text.
+   */
+  private async writeSummaryFile(params: {
+    transcriptPath: string;
+    audioPath?: string;
+    category?: string;
+    summary: string;
+    summaryPath?: string;
+  }): Promise<string> {
+    const now = new Date();
+    const content = buildSummaryContent({
+      transcriptPath: params.transcriptPath,
+      audioPath: params.audioPath,
+      category: params.category || undefined,
+      summary: params.summary,
+      createdAt: now,
+    });
+
+    const existing = params.summaryPath
+      ? this.app.vault.getAbstractFileByPath(params.summaryPath)
+      : null;
+    let path: string;
+    if (existing instanceof TFile) {
+      await this.app.vault.modify(existing, content);
+      path = existing.path;
+    } else {
+      path = summaryFilePath(params.transcriptPath, now);
+      // Two summaries in the same second would share a stamp
+      for (let n = 1; this.app.vault.getAbstractFileByPath(path); n++) {
+        path = summaryFilePath(params.transcriptPath, now).replace(
+          /\.md$/,
+          ` ${n}.md`
+        );
+      }
+      await this.app.vault.create(path, content);
+    }
+
+    progressBus.publish({ stage: "summary-file-created", path });
+    return path;
+  }
+
+  /** The transcript's audio and category, as its frontmatter records them. */
+  private readTranscriptMeta(
+    file: TFile,
+    content: string
+  ): { audioPath?: string; category?: string } {
+    const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    const audio = frontmatter?.audio;
+    const cachedCategory = frontmatter?.category;
+    return {
+      audioPath: typeof audio === "string" && audio ? audio : undefined,
+      category:
+        typeof cachedCategory === "string" && cachedCategory.trim().length > 0
+          ? cachedCategory.trim()
+          : readFrontmatterCategory(content),
+    };
+  }
+
+  /**
+   * The summarize command: classification and summary for a transcript,
+   * written to a new summary file. Run from the transcript file itself that is
+   * all it does; run from a note linking it, `insertAt` is the end of the
+   * link's line and the summary is embedded under it.
+   */
+  async summarizeTranscriptFile(
+    file: TFile,
+    options: TranscriptionRunOptions,
+    insertAt?: { path: string; line: number; ch: number }
+  ): Promise<void> {
+    if (this.writing) {
+      new Notice("Generator is already in progress.");
+      return;
+    }
+    if (!options.apiKey) {
+      new Notice(
+        "API Key is not configured. Please set it in the plugin settings."
+      );
+      return;
+    }
+
+    const content = await this.app.vault.read(file);
+    const transcriptText = readTranscriptBody(content);
+    if (transcriptText.length === 0) {
+      new Notice("No transcript text found in this file.");
+      return;
+    }
+    const { audioPath, category } = this.readTranscriptMeta(file, content);
+
+    const abortController = new AbortController();
+    const unsubscribeCancel = progressBus.subscribe((event) => {
+      if (event.stage === "cancel-requested") abortController.abort();
+    });
+
+    this.writing = true;
+    try {
+      await this.openProgressView();
+      progressBus.publish({ stage: "model-selected", model: options.model });
+      progressBus.publish({
+        stage: "file-detected",
+        fileName: audioPath ?? file.path,
+      });
+      if (insertAt) {
+        progressBus.publish({
+          stage: "target-file-selected",
+          path: insertAt.path,
+          line: insertAt.line,
+          ch: insertAt.ch,
+        });
+      }
+      progressBus.publish({ stage: "transcript-file-selected", path: file.path });
+
+      const summaryPath = await this.runSummaryPipeline({
+        apiKey: options.apiKey,
+        options,
+        transcriptText,
+        transcriptPath: file.path,
+        audioPath,
+        knownCategory: category,
+        abortSignal: abortController.signal,
+        publishUsage: (result) => this.publishUsage(result),
+      });
+      if (insertAt) {
+        await this.obsidianInteractor.appendTextToFile(
+          insertAt.path,
+          insertAt.line,
+          insertAt.ch,
+          `\n\n${summaryEmbed(summaryPath)}`
+        );
+      }
+      progressBus.publish({ stage: "success" });
+    } catch (e) {
+      if (isTranscriptionCancelledError(e) || abortController.signal.aborted) {
+        new Notice("Summarization cancelled");
+        progressBus.publish({ stage: "cancelled" });
+      } else if (isTranscriptionQuotaError(e)) {
+        new Notice(e.status);
+        progressBus.publish({
+          stage: "error",
+          message: `${e.status}: ${e.detail}`,
+        });
+      } else {
+        console.error("[TranscriptionController] summarize error", e);
+        new Notice("Summarization failed");
+        progressBus.publish({
+          stage: "error",
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    } finally {
+      this.writing = false;
+      unsubscribeCancel();
+    }
+  }
+
+  /**
+   * A Retry on a run that ended before its summary did — the retry wait timed
+   * out, it was cancelled, or a reload interrupted it. Does what the run had
+   * left: classification when needed, the summary file, and, when the run was
+   * started from a note, the transcript link and summary embed at its cursor,
+   * which a run only writes once everything else is done.
+   *
+   * Nothing waits on a further Retry here, so a failure ends it with an error
+   * and the panel offers Retry again.
+   */
+  private async finishSummary(e: {
+    transcriptPath: string;
+    prompt?: string;
+    target?: { path: string; line: number; ch: number };
+  }): Promise<void> {
+    const fail = (message: string) =>
+      progressBus.publish({ stage: "error", message });
+
+    if (this.writing) {
+      fail("Another run is in progress.");
+      return;
+    }
+    const options = this.getRunOptions?.();
+    if (!options?.apiKey) {
+      fail("API Key is not configured. Please set it in the plugin settings.");
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(e.transcriptPath);
+    if (!(file instanceof TFile)) {
+      fail(`Transcript file not found: ${e.transcriptPath}`);
+      return;
+    }
+
+    this.writing = true;
+    try {
+      const content = await this.app.vault.read(file);
+      const transcriptText = readTranscriptBody(content);
+      if (transcriptText.length === 0) {
+        throw new Error("No transcript text found in the transcript file.");
+      }
+      const { audioPath, category } = this.readTranscriptMeta(file, content);
+      const abortSignal = new AbortController().signal;
+      const publishUsage = (result: TranscriptionResult) =>
+        this.publishUsage(result);
+
+      let summaryPath: string;
+      if (e.prompt !== undefined) {
+        // An edited prompt settles the summary itself; the category only
+        // ever chose a prompt
+        let summary: string;
+        try {
+          summary = await this.summarizeOnce(
+            options.apiKey,
+            e.prompt,
+            transcriptText,
+            options.model,
+            abortSignal,
+            publishUsage
+          );
+        } catch (error) {
+          progressBus.publish({
+            stage: "summarization-step-failed",
+            message: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
+        summaryPath = await this.writeSummaryFile({
+          transcriptPath: file.path,
+          audioPath,
+          category,
+          summary,
+        });
+      } else {
+        summaryPath = await this.runSummaryPipeline({
+          apiKey: options.apiKey,
+          options,
+          transcriptText,
+          transcriptPath: file.path,
+          audioPath,
+          knownCategory: category,
+          abortSignal,
+          publishUsage,
+          waitForRetry: false,
+        });
+      }
+
+      if (e.target) {
+        await this.obsidianInteractor.appendTextToFile(
+          e.target.path,
+          e.target.line,
+          e.target.ch,
+          `[[${file.name}]]\n\n${summaryEmbed(summaryPath)}`
+        );
+      }
+      progressBus.publish({ stage: "success" });
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.writing = false;
+    }
+  }
+
+  /**
+   * Summarizes a finished run again with a prompt edited in the panel. Runs
+   * outside any transcription, so it reads everything it needs from the files
+   * and the current settings rather than from a run's memory.
+   */
+  private async resummarize(e: {
+    transcriptPath: string;
+    summaryPath?: string;
+    prompt: string;
+  }): Promise<void> {
+    const fail = (message: string) =>
+      progressBus.publish({ stage: "summarization-step-failed", message });
+
+    if (this.writing) {
+      fail("Another run is in progress.");
+      return;
+    }
+    const options = this.getRunOptions?.();
+    if (!options?.apiKey) {
+      fail("API Key is not configured. Please set it in the plugin settings.");
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(e.transcriptPath);
+    if (!(file instanceof TFile)) {
+      fail(`Transcript file not found: ${e.transcriptPath}`);
+      return;
+    }
+
+    this.writing = true;
+    try {
+      const content = await this.app.vault.read(file);
+      const transcriptText = readTranscriptBody(content);
+      if (transcriptText.length === 0) {
+        fail("No transcript text found in the transcript file.");
+        return;
+      }
+      const { audioPath, category } = this.readTranscriptMeta(file, content);
+      const summary = await this.summarizeOnce(
+        options.apiKey,
+        e.prompt,
+        transcriptText,
+        options.model,
+        new AbortController().signal,
+        (result) => this.publishUsage(result)
+      );
+      await this.writeSummaryFile({
+        transcriptPath: file.path,
+        audioPath,
+        category,
+        summary,
+        summaryPath: e.summaryPath,
+      });
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.writing = false;
+    }
+  }
+
   private async waitForRetryEvent<T>(
     eventStage: string,
-    retryFn: () => Promise<T>
+    retryFn: (event: ProgressEvent) => Promise<T>
   ): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1234,7 +1638,7 @@ export class TranscriptionController {
         stopListening();
 
         try {
-          const result = await retryFn();
+          const result = await retryFn(event);
           settleResolve(result);
         } catch (retryError) {
           if (
@@ -1564,17 +1968,10 @@ export class TranscriptionController {
         ? cachedCategory.trim()
         : readFrontmatterCategory(content);
 
-    // Extract transcription text after "## Transcription\n\n"
-    const marker = "## Transcription\n\n";
-    const markerIndex = content.indexOf(marker);
-    if (markerIndex === -1) return null;
-
     // A transcription file can be finalized with unresolved chunks, and always
     // carries the chunk markers that make retry possible. Neither belongs in
     // what gets handed back to the model.
-    const text = stripChunkMarkers(
-      content.substring(markerIndex + marker.length)
-    );
+    const text = readTranscriptBody(content);
     if (text.length === 0) return null;
 
     return { path: file.path, text, category };

@@ -1,6 +1,7 @@
 import {
   App,
   MarkdownView,
+  TFile,
   Modal,
   Notice,
   Plugin,
@@ -10,8 +11,13 @@ import {
 } from "obsidian";
 import {
   TranscriptionController,
+  type TranscriptionRunOptions,
   type TranscriptionSource,
 } from "./controllers/TranscriptionController";
+import {
+  isTranscriptFileName,
+  pickTranscriptLink,
+} from "_base/utils/summaryFile";
 import { isAudioFileExtension } from "_base/constants/regex";
 import { getProgressViewType } from "./_base/constants/progress";
 import { TranscriptionProgressView } from "./_base/ui/TranscriptionProgressView";
@@ -73,7 +79,8 @@ export default class TranscriptionAudioPlugin extends Plugin {
 
     this.transcriptionController = new TranscriptionController(
       this.app,
-      this.progressViewType
+      this.progressViewType,
+      () => this.buildRunOptions()
     );
 
     this.registerView(
@@ -95,6 +102,23 @@ export default class TranscriptionAudioPlugin extends Plugin {
         const source = this.findTranscriptionSource();
         if (!source) return false;
         if (!checking) void this.commandGenerateTranscript(source);
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "summarize-transcript",
+      name: "Summarize transcript",
+      checkCallback: (checking) => {
+        const source = this.findSummarySource();
+        if (!source) return false;
+        if (!checking) {
+          void this.transcriptionController.summarizeTranscriptFile(
+            source.file,
+            this.buildRunOptions(),
+            source.insertAt
+          );
+        }
         return true;
       },
     });
@@ -205,7 +229,45 @@ export default class TranscriptionAudioPlugin extends Plugin {
     return null;
   }
 
+  /**
+   * An open transcript file summarizes itself into a new file only. A note in
+   * editing mode that links a transcript summarizes that one and gets the
+   * summary embedded under the link's line.
+   */
+  private findSummarySource(): {
+    file: TFile;
+    insertAt?: { path: string; line: number; ch: number };
+  } | null {
+    const active = this.app.workspace.getActiveFile();
+    if (active && isTranscriptFileName(active.name)) return { file: active };
+
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || view.getMode() !== "source" || !view.file) return null;
+    const editor = view.editor;
+    const link = pickTranscriptLink(
+      editor.getValue(),
+      editor.posToOffset(editor.getCursor())
+    );
+    if (!link) return null;
+    const file = this.app.metadataCache.getFirstLinkpathDest(
+      link.linkpath,
+      view.file.path
+    );
+    if (!file || !isTranscriptFileName(file.name)) return null;
+
+    const { line } = editor.offsetToPos(link.end);
+    return {
+      file,
+      insertAt: { path: view.file.path, line, ch: editor.getLine(line).length },
+    };
+  }
+
   async commandGenerateTranscript(source: TranscriptionSource) {
+    await this.transcriptionController.run(source, this.buildRunOptions());
+  }
+
+  /** Run options from the current settings, resolving the stored API key. */
+  private buildRunOptions(): TranscriptionRunOptions {
     const apiKey =
       this.settings.secretApiKeyName && canUseSecretStorage(this.app)
         ? this.app.secretStorage?.getSecret(this.settings.secretApiKeyName) ??
@@ -216,7 +278,7 @@ export default class TranscriptionAudioPlugin extends Plugin {
       new Notice(SECRET_STORAGE_VERSION_MESSAGE);
     }
 
-    await this.transcriptionController.run(source, {
+    return {
       apiKey,
       prompt: this.settings.prompt || DEFAULT_BASIC_MODE_PROMPT,
       model: this.settings.model,
@@ -231,7 +293,7 @@ export default class TranscriptionAudioPlugin extends Plugin {
       summarizeTranscript: this.settings.summarizeTranscript,
       enableCategoryClassification: this.settings.enableCategoryClassification,
       categories: this.settings.categories,
-    });
+    };
   }
 }
 

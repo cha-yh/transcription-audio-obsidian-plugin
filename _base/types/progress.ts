@@ -29,6 +29,10 @@ export type ProgressStage =
   | "summarization-step-complete"
   | "summarization-step-failed"
   | "summarization-retry-requested"
+  | "summary-file-created"
+  | "transcript-file-selected"
+  | "summary-rerun-requested"
+  | "summary-finish-requested"
   | "cancel-requested"
   | "cancelled"
   | "success"
@@ -149,10 +153,37 @@ export type ProgressEvent =
   | { stage: "classification-step-complete"; elapsedMs: number; category: string }
   | { stage: "classification-step-failed"; message: string }
   | { stage: "classification-retry-requested" }
-  | { stage: "summarization-step-start" }
+  /** Carries the prompt actually sent, so the panel can show and edit it. */
+  | { stage: "summarization-step-start"; prompt: string }
   | { stage: "summarization-step-complete"; elapsedMs: number }
   | { stage: "summarization-step-failed"; message: string }
-  | { stage: "summarization-retry-requested" }
+  /** A retry while the run waits; `prompt` replaces the one that failed. */
+  | { stage: "summarization-retry-requested"; prompt?: string }
+  | { stage: "summary-file-created"; path: string }
+  /**
+   * Retry, from the panel, the summary of a run that ended without one: it
+   * failed, was cancelled or was interrupted. `prompt` skips classification;
+   * `target` is the cursor the run would have written its result at.
+   */
+  | {
+      stage: "summary-finish-requested";
+      transcriptPath: string;
+      prompt?: string;
+      target?: { path: string; line: number; ch: number };
+    }
+  /** The summarize command starts from this existing transcript file. */
+  | { stage: "transcript-file-selected"; path: string }
+  /**
+   * Summarize an already transcribed run again, outside any run. Paths come
+   * from the card, so it works on records restored after a reload too.
+   */
+  | {
+      stage: "summary-rerun-requested";
+      transcriptPath: string;
+      /** Rewritten in place when present; a new file is created otherwise. */
+      summaryPath?: string;
+      prompt: string;
+    }
   | { stage: "cancel-requested" }
   | { stage: "cancelled" }
   | { stage: "success" }

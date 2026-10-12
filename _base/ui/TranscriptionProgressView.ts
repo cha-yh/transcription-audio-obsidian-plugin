@@ -29,6 +29,10 @@ import { TERMINAL_STAGES } from "../constants/sessionHistory";
 import type { ProgressHistoryStore } from "../services/session/ProgressHistoryStore";
 import type { AudioPluginSettings } from "../types/setting";
 import {
+  reduceSummaryProgress,
+  type SummaryProgress,
+} from "../utils/summaryProgress";
+import {
   applyRunProgressEvent,
   createRunProgress,
   isInFlight,
@@ -96,6 +100,18 @@ interface SessionRefs {
   categoryEl: HTMLElement;
   transcriptRowEl: HTMLElement;
   transcriptFileEl: HTMLAnchorElement;
+  summaryRowEl: HTMLElement;
+  summaryFileEl: HTMLAnchorElement;
+  /** Classification, summarization and the prompt editor. */
+  progressSummaryEl: HTMLElement;
+  /** What the user typed into the prompt editor and has not sent yet. */
+  summaryPromptDraft?: string;
+  summaryPromptOpen: boolean;
+  /**
+   * A summary request sent from this card outside any run, still in flight:
+   * rewriting a finished run's summary, or finishing one a run left undone.
+   */
+  summaryRequest?: "rewrite" | "finish";
   logEl: HTMLElement;
   latestLogEl: HTMLElement;
   detailButtonEl: HTMLButtonElement;
@@ -156,6 +172,11 @@ export class TranscriptionProgressView extends ItemView {
   /** Disambiguates two runs that start in the same millisecond. */
   private sessionSeq = 0;
   private pendingEvents: ProgressEvent[] = [];
+  /**
+   * The card a summary request borrowed `currentSession` from, restored when
+   * the request settles. `null` means there was none.
+   */
+  private sessionBeforeSummaryRerun?: TranscriptionSession | null;
   /** Keeps SVG pattern ids unique across sessions in the same document. */
   private sparklineSeq = 0;
 
@@ -688,6 +709,291 @@ export class TranscriptionProgressView extends ItemView {
     }
   }
 
+  /**
+   * Feeds an event to the summary section. A summary requested from a card
+   * outside any run borrows `currentSession` for its events, and gives it
+   * back once the request settles.
+   */
+  private updateSummaryProgress(e: ProgressEvent): void {
+    const session = this.currentSession;
+    if (!session) return;
+    const next = reduceSummaryProgress(session.summary, e);
+    if (next === session.summary) return;
+    session.summary = next;
+
+    if (e.stage === "summarization-step-start") {
+      // Show what was sent; an unsent edit is superseded by it
+      session.summaryPromptDraft = undefined;
+    }
+    if (
+      e.stage === "classification-step-failed" ||
+      e.stage === "summarization-step-failed"
+    ) {
+      // The Retry for these is in the progress area
+      if (!session.isProgressExpanded) {
+        session.isProgressExpanded = true;
+        this.renderProgress(session);
+      }
+    }
+    this.renderSummarySection(session);
+  }
+
+  /**
+   * Ends a summary request made from a card outside any run, once its last
+   * event is in, and gives `currentSession` back to the card it was
+   * borrowed from. Runs after every other handler, so that last event still
+   * lands on the requesting card.
+   */
+  private settleSummaryRequest(e: ProgressEvent): void {
+    const session = this.currentSession;
+    const request = session?.summaryRequest;
+    if (!session || !request) return;
+    const settled =
+      request === "rewrite"
+        ? e.stage === "summary-file-created" ||
+          e.stage === "summarization-step-failed"
+        : e.stage === "success" ||
+          e.stage === "error" ||
+          e.stage === "cancelled";
+    if (!settled) return;
+
+    session.summaryRequest = undefined;
+    if (this.sessionBeforeSummaryRerun !== undefined) {
+      this.currentSession = this.sessionBeforeSummaryRerun ?? undefined;
+      this.sessionBeforeSummaryRerun = undefined;
+    }
+    this.refreshSummarySections();
+  }
+
+  /**
+   * Redraws every card's summary section. Whether a summary can be requested
+   * depends on whether anything else is running, so a run starting or ending
+   * changes it on cards it never touches.
+   */
+  private refreshSummarySections(): void {
+    for (const session of this.sessions) {
+      this.renderSummarySection(session);
+    }
+  }
+
+  /** Some run, or a summary request, is still in flight somewhere. */
+  private isAnyRunBusy(): boolean {
+    return this.sessions.some(
+      (session) =>
+        session.status === "running" || session.summaryRequest !== undefined
+    );
+  }
+
+  /**
+   * Whether a summary request can be sent from this card now. A run that is
+   * still going takes it as the retry it is waiting for; otherwise it needs
+   * the transcript and nothing else in flight.
+   */
+  private canRequestSummary(session: TranscriptionSession): boolean {
+    if (session.status === "running") return true;
+    return Boolean(session.transcriptPath) && !this.isAnyRunBusy();
+  }
+
+  /**
+   * Sends a classification or summary retry from the card, picking the
+   * request that fits where its run stands:
+   * - still running: the retry the run is waiting for;
+   * - finished with success: rewrite the summary file with `prompt`;
+   * - ended without a summary: finish the job, including the note insert.
+   * Without `prompt` the summary goes through classification again.
+   */
+  private requestSummary(
+    session: TranscriptionSession,
+    step: "classify" | "summarize",
+    prompt?: string
+  ): void {
+    if (session.status === "running") {
+      progressBus.publish(
+        step === "classify"
+          ? { stage: "classification-retry-requested" }
+          : { stage: "summarization-retry-requested", prompt }
+      );
+      return;
+    }
+
+    const transcriptPath = session.transcriptPath;
+    if (!transcriptPath || this.isAnyRunBusy()) return;
+    const rewrite = session.status === "success" && prompt !== undefined;
+
+    // Borrow currentSession so the request's events land on this card
+    if (this.currentSession !== session) {
+      this.sessionBeforeSummaryRerun = this.currentSession ?? null;
+      this.currentSession = session;
+    }
+    session.summaryRequest = rewrite ? "rewrite" : "finish";
+    this.refreshSummarySections();
+
+    if (rewrite) {
+      progressBus.publish({
+        stage: "summary-rerun-requested",
+        transcriptPath,
+        summaryPath: session.summary?.path,
+        prompt: prompt!,
+      });
+      return;
+    }
+    progressBus.publish({
+      stage: "summary-finish-requested",
+      transcriptPath,
+      prompt,
+      target: session.targetPath
+        ? {
+            path: session.targetPath,
+            line: session.targetLine ?? 0,
+            ch: session.targetCh ?? 0,
+          }
+        : undefined,
+    });
+  }
+
+  private addSummaryRetryButton(
+    row: HTMLElement,
+    session: TranscriptionSession,
+    onClick: () => void
+  ): void {
+    const button = row.createEl("button", {
+      text: "Retry",
+      cls: "transcription-audio-log-retry-button",
+    });
+    button.disabled = !this.canRequestSummary(session);
+    button.addEventListener("click", () => {
+      if (!this.canRequestSummary(session)) return;
+      button.disabled = true;
+      onClick();
+    });
+  }
+
+  /**
+   * Classification and summarization with the prompt behind them. A failed
+   * or stopped step carries Retry on its row; the prompt can be edited and
+   * sent from below, which also rewrites a finished run's summary.
+   */
+  private renderSummarySection(session: TranscriptionSession): void {
+    const el = session.progressSummaryEl;
+    el.empty();
+    const summary = session.summary;
+    el.style.display = summary ? "" : "none";
+    if (!summary) return;
+
+    const inFlight =
+      session.status === "running" || session.summaryRequest !== undefined;
+    const stepView = (phase: SummaryProgress["phase"]) =>
+      phase === "running" && !inFlight ? "stopped" : phase;
+    const promptToSend = () => session.summaryPromptDraft ?? summary.prompt;
+
+    el.createEl("div", {
+      text: "Summary",
+      cls: "transcription-audio-summary-title",
+    });
+
+    if (summary.classify) {
+      const view = stepView(summary.classify.phase);
+      const text =
+        view === "running"
+          ? "Classifying..."
+          : view === "done"
+          ? summary.classify.category
+            ? `Category: ${summary.classify.category}`
+            : "No category matched, default prompt"
+          : view === "failed"
+          ? "Failed"
+          : "Stopped";
+      const row = this.renderSummaryRow(el, "Classify", view, text);
+      if (view === "failed" || view === "stopped") {
+        this.addSummaryRetryButton(row, session, () =>
+          this.requestSummary(session, "classify")
+        );
+      }
+    }
+
+    if (summary.phase) {
+      const view = stepView(summary.phase);
+      const text =
+        view === "running"
+          ? "Summarizing..."
+          : view === "done"
+          ? "Done"
+          : view === "failed"
+          ? "Failed"
+          : "Stopped";
+      const row = this.renderSummaryRow(el, "Summarize", view, text);
+      if (view === "failed" || view === "stopped") {
+        this.addSummaryRetryButton(row, session, () =>
+          this.requestSummary(session, "summarize", promptToSend())
+        );
+      }
+    }
+
+    if (summary.prompt === undefined) return;
+
+    const details = el.createEl("details", {
+      cls: "transcription-audio-summary-prompt",
+    });
+    details.open = session.summaryPromptOpen;
+    details.addEventListener("toggle", () => {
+      session.summaryPromptOpen = details.open;
+    });
+    details.createEl("summary", { text: "Prompt" });
+    const textarea = details.createEl("textarea", {
+      cls: "transcription-audio-summary-prompt-input",
+    });
+    textarea.value = promptToSend() ?? "";
+    textarea.rows = 6;
+
+    const actions = details.createEl("div", {
+      cls: "transcription-audio-summary-prompt-actions",
+    });
+    const failed = summary.phase === "failed";
+    const button = actions.createEl("button", {
+      text: failed ? "Retry with this prompt" : "Summarize again",
+      cls: "transcription-audio-log-retry-button",
+    });
+    const canSend = () =>
+      textarea.value.trim().length > 0 &&
+      summary.phase !== "running" &&
+      // A running run only takes a prompt as the retry of a failed summary
+      (session.status !== "running" || failed) &&
+      this.canRequestSummary(session);
+    button.disabled = !canSend();
+    textarea.addEventListener("input", () => {
+      session.summaryPromptDraft = textarea.value;
+      button.disabled = !canSend();
+    });
+    button.addEventListener("click", () => {
+      if (!canSend()) return;
+      button.disabled = true;
+      this.requestSummary(session, "summarize", textarea.value);
+    });
+  }
+
+  private renderSummaryRow(
+    el: HTMLElement,
+    label: string,
+    view: string | undefined,
+    text: string
+  ): HTMLElement {
+    const row = el.createEl("div", {
+      cls: `transcription-audio-progress-row transcription-audio-progress-row-${
+        view === "running" ? "transcribing" : view
+      }`,
+    });
+    row.createEl("span", {
+      text: label,
+      cls: "transcription-audio-progress-row-label",
+    });
+    const state = row.createEl("span", {
+      cls: "transcription-audio-progress-row-state",
+    });
+    state.createEl("span", { cls: "transcription-audio-progress-dot" });
+    state.createEl("span", { text });
+    return row;
+  }
+
   /** Feeds an event to the current run's progress area and redraws on change. */
   private updateRunProgress(e: ProgressEvent): void {
     const session = this.currentSession;
@@ -1066,6 +1372,22 @@ export class TranscriptionProgressView extends ItemView {
     }
     row7.style.display = state.transcriptPath === undefined ? "none" : "";
 
+    const summaryPath = state.summary?.path;
+    const summaryRowEl = infoEl.createEl("div", {
+      cls: "transcription-audio-row",
+    });
+    summaryRowEl.createEl("span", {
+      text: "Summary: ",
+      cls: "transcription-audio-label",
+    });
+    const summaryFileEl = summaryRowEl.createEl("a", {
+      text: summaryPath ? summaryPath.split("/").pop() || summaryPath : "-",
+      cls: "internal-link transcription-audio-file-link",
+    });
+    summaryFileEl.href = "#";
+    if (summaryPath) summaryFileEl.title = summaryPath;
+    summaryRowEl.style.display = summaryPath === undefined ? "none" : "";
+
     const logEl = sessionEl.createEl("div", { cls: "transcription-audio-log" });
 
     const statusBarEl = logEl.createEl("div", {
@@ -1095,6 +1417,9 @@ export class TranscriptionProgressView extends ItemView {
     });
     const progressChartEl = progressEl.createEl("div");
     const progressStatusEl = progressEl.createEl("div");
+    const progressSummaryEl = progressEl.createEl("div", {
+      cls: "transcription-audio-summary",
+    });
 
     const logsBarEl = progressEl.createEl("div", {
       cls: "transcription-audio-progress-logs",
@@ -1119,6 +1444,10 @@ export class TranscriptionProgressView extends ItemView {
       categoryEl,
       transcriptRowEl: row7,
       transcriptFileEl,
+      summaryRowEl,
+      summaryFileEl,
+      progressSummaryEl,
+      summaryPromptOpen: false,
       logEl,
       latestLogEl,
       detailButtonEl,
@@ -1135,6 +1464,7 @@ export class TranscriptionProgressView extends ItemView {
 
     this.updateIndicator(session, indicatorStatusOf(state.status));
     this.renderProgress(session);
+    this.renderSummarySection(session);
     if (state.isLogExpanded) {
       this.renderLogHistory(session);
     }
@@ -1185,6 +1515,12 @@ export class TranscriptionProgressView extends ItemView {
       }
     });
 
+    session.summaryFileEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      const path = session.summary?.path;
+      if (path) void this.openFileByPath(path);
+    });
+
     session.transcriptFileEl.addEventListener("click", (event) => {
       event.preventDefault();
       if (session.transcriptPath) {
@@ -1225,6 +1561,7 @@ export class TranscriptionProgressView extends ItemView {
     this.sessions.unshift(session);
     this.currentSession = session;
     this.applyRetention();
+    this.refreshSummarySections();
     return session;
   }
 
@@ -1252,56 +1589,6 @@ export class TranscriptionProgressView extends ItemView {
       session.logHistoryEl.style.display = "none";
       session.detailButtonEl.setText(SHOW_LOGS_LABEL);
     }
-  }
-
-  /**
-   * Standalone retry row for the classification and summarization steps, which
-   * occur once per run. Chunk retries use the per-log-line button instead, since
-   * several chunks can fail and each needs its own control.
-   */
-  private addRetryButton(
-    session: TranscriptionSession,
-    label: string,
-    onRetry: () => void
-  ): void {
-    const retryRow = session.logEl.createEl("div", {
-      cls: "transcription-audio-retry-row",
-    });
-    retryRow.createEl("span", {
-      text: label,
-      cls: "transcription-audio-retry-label",
-    });
-    const retryBtn = retryRow.createEl("button", {
-      text: "Retry",
-      cls: "transcription-audio-retry-button",
-    });
-    retryBtn.addEventListener("click", () => {
-      retryBtn.disabled = true;
-      retryBtn.setText("Retrying...");
-      onRetry();
-    });
-
-    // Listen for result to re-enable or remove — register for auto-cleanup on view close
-    const unsubscribe = progressBus.subscribe((event) => {
-      // Classification/Summarization success — remove retry row
-      if (
-        event.stage === "classification-step-complete" ||
-        event.stage === "summarization-step-complete"
-      ) {
-        retryRow.remove();
-        unsubscribe();
-        return;
-      }
-      // Classification/Summarization failure — re-enable retry button
-      if (
-        event.stage === "classification-step-failed" ||
-        event.stage === "summarization-step-failed"
-      ) {
-        retryBtn.disabled = false;
-        retryBtn.setText("Retry");
-      }
-    });
-    this.register(unsubscribe);
   }
 
   /**
@@ -1359,6 +1646,12 @@ export class TranscriptionProgressView extends ItemView {
     session.targetFileEl.title = path;
   }
 
+  private setSummaryFile(session: TranscriptionSession, path: string): void {
+    session.summaryFileEl.setText(path.split("/").pop() || path);
+    session.summaryFileEl.title = path;
+    session.summaryRowEl.style.display = "";
+  }
+
   private setTranscriptFile(
     session: TranscriptionSession,
     path: string
@@ -1407,6 +1700,7 @@ export class TranscriptionProgressView extends ItemView {
     this.updateIndicator(session, indicatorStatusOf(status));
     session.closeButtonEl.hidden = !isRemovableStatus(status);
     this.renderProgress(session);
+    this.refreshSummarySections();
   }
 
   private removeSession(session: TranscriptionSession): void {
@@ -1516,6 +1810,8 @@ export class TranscriptionProgressView extends ItemView {
   private onProgress(e: ProgressEvent): void {
     this.handleProgress(e);
     this.updateRunProgress(e);
+    this.updateSummaryProgress(e);
+    this.settleSummaryRequest(e);
 
     // A finished run is worth writing at once; anything else can wait for the
     // debounce, since a run emits events far faster than a file should be
@@ -1902,6 +2198,30 @@ export class TranscriptionProgressView extends ItemView {
         );
         break;
       }
+      case "transcript-file-selected": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.setTranscriptFile(this.currentSession, e.path);
+        this.pushLog(
+          `Transcript: ${e.path.split("/").pop() || e.path}`,
+          `Summarizing transcript: ${e.path}`,
+          this.currentSession
+        );
+        break;
+      }
+      case "summary-file-created": {
+        if (!this.currentSession) {
+          break;
+        }
+        this.setSummaryFile(this.currentSession, e.path);
+        this.pushLog(
+          `Summary: ${e.path.split("/").pop() || e.path}`,
+          `Summary saved to: ${e.path}`,
+          this.currentSession
+        );
+        break;
+      }
       case "classification-step-start": {
         if (!this.currentSession) {
           break;
@@ -1934,7 +2254,7 @@ export class TranscriptionProgressView extends ItemView {
         this.setStatus(this.currentSession, "Summarizing");
         this.pushLog(
           "Step 3: Summarization started",
-          "Step 3: Summarizing transcription with category prompt",
+          `Step 3: Summarizing with a ${e.prompt.length}-character prompt`,
           this.currentSession
         );
         break;
@@ -1956,17 +2276,11 @@ export class TranscriptionProgressView extends ItemView {
           break;
         }
         this.setStatus(this.currentSession, "Classification failed");
+        // The Retry button lives in the progress area's summary section
         this.pushLog(
           "Step 2: Classification failed",
           `Step 2: Classification failed - ${e.message}`,
           this.currentSession
-        );
-        this.addRetryButton(
-          this.currentSession,
-          "Classification failed",
-          () => {
-            progressBus.publish({ stage: "classification-retry-requested" });
-          }
         );
         break;
       }
@@ -1979,13 +2293,6 @@ export class TranscriptionProgressView extends ItemView {
           "Step 3: Summarization failed",
           `Step 3: Summarization failed - ${e.message}`,
           this.currentSession
-        );
-        this.addRetryButton(
-          this.currentSession,
-          "Summarization failed",
-          () => {
-            progressBus.publish({ stage: "summarization-retry-requested" });
-          }
         );
         break;
       }

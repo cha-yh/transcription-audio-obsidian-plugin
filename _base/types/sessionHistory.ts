@@ -51,6 +51,23 @@ export interface PersistedRunProgress {
   chunks: { chunkIndex: number; phase: PersistedChunkPhase }[];
 }
 
+export type PersistedStepPhase = "running" | "done" | "failed";
+
+/** Classification and summarization, as the progress area shows them. */
+export interface PersistedSummaryProgress {
+  /** Absent when classification is off. */
+  classify?: {
+    phase: PersistedStepPhase;
+    /** Empty when no category matched and the default prompt was used. */
+    category?: string;
+  };
+  phase?: PersistedStepPhase;
+  /** The prompt last sent, shown and editable in the panel. */
+  prompt?: string;
+  /** The summary file, once written. */
+  path?: string;
+}
+
 export interface PersistedLogEntry {
   text: string;
   /** When the line was logged. Absent on lines written before it was kept. */
@@ -109,6 +126,8 @@ export interface PersistedSession {
    * their chart in the log entry that carried it.
    */
   progress?: PersistedRunProgress;
+  /** Absent until a run reaches classification or summarization. */
+  summary?: PersistedSummaryProgress;
   logHistory: PersistedLogEntry[];
   /** A Set at runtime; an ascending array on disk. */
   failedChunks: number[];
