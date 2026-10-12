@@ -141,6 +141,8 @@ export type ProgressEvent =
        */
       retryable?: boolean;
       promptTokenCount?: number;
+      /** Part of the prompt served from Gemini's implicit cache. */
+      cachedContentTokenCount?: number;
       candidatesTokenCount?: number;
       thoughtsTokenCount?: number;
       toolUsePromptTokenCount?: number;

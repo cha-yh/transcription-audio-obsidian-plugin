@@ -2139,6 +2139,10 @@ export class TranscriptionProgressView extends ItemView {
         if (typeof e.thoughtsTokenCount === "number") {
           usageParts.push(`thoughts ${e.thoughtsTokenCount}`);
         }
+        // Reported even at 0, so a missed cache is visible too
+        if (typeof e.cachedContentTokenCount === "number") {
+          usageParts.push(`cached ${e.cachedContentTokenCount}`);
+        }
         if (typeof e.toolUsePromptTokenCount === "number") {
           usageParts.push(`tool ${e.toolUsePromptTokenCount}`);
         }

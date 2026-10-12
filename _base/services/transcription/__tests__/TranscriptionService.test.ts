@@ -7,6 +7,7 @@ import {
   TranscriptionService,
   extractInteractionText,
   extractInteractionUsage,
+  transcriptRequestPrefix,
   type TranscriptionAudioSource,
 } from "../TranscriptionService";
 import type { TranscriptionOptions } from "../transcriptionConfig";
@@ -506,7 +507,58 @@ describe("extractInteractionText", () => {
   });
 });
 
+describe("requests about a finished transcript", () => {
+  const service = new TranscriptionService();
+  const transcript = "A long meeting transcript.";
+
+  it("open with the same transcript prefix, so the second can hit the cache", async () => {
+    mockGenerateContent
+      .mockResolvedValueOnce({ text: "Meeting", usageMetadata: {} })
+      .mockResolvedValueOnce({ text: "Summary", usageMetadata: {} });
+
+    await service.classifyTranscript("key", transcript, ["Meeting"], "m");
+    await service.summarizeText("key", "Summarize briefly.", transcript, "m");
+
+    const [classify, summarize] = mockGenerateContent.mock.calls.map(
+      (call: any[]) => call[0].contents[0] as string
+    );
+    const prefix = transcriptRequestPrefix(transcript);
+    expect(classify.startsWith(prefix)).toBe(true);
+    expect(summarize.startsWith(prefix)).toBe(true);
+    expect(summarize.slice(prefix.length)).toBe("Summarize briefly.");
+  });
+
+  it("reports how much of the prompt came from the cache", async () => {
+    mockGenerateContent.mockResolvedValueOnce({
+      text: "Summary",
+      usageMetadata: { promptTokenCount: 5000, cachedContentTokenCount: 4200 },
+    });
+
+    const result = await service.summarizeText("key", "p", transcript, "m");
+
+    expect(result.usage.cachedContentTokenCount).toBe(4200);
+  });
+
+  it("reads a cache miss, which the API reports by leaving the field out, as 0", async () => {
+    mockGenerateContent.mockResolvedValueOnce({
+      text: "Summary",
+      usageMetadata: { promptTokenCount: 16018, totalTokenCount: 17420 },
+    });
+
+    const result = await service.summarizeText("key", "p", transcript, "m");
+
+    expect(result.usage.cachedContentTokenCount).toBe(0);
+  });
+});
+
 describe("extractInteractionUsage", () => {
+  it("reads cached input tokens", () => {
+    expect(
+      extractInteractionUsage({ usage: { total_cached_tokens: 3 } })
+        .cachedContentTokenCount
+    ).toBe(3);
+  });
+
   it("maps the usage counts it recognizes and leaves the rest undefined", () => {
     expect(
       extractInteractionUsage({

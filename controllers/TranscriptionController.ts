@@ -329,6 +329,7 @@ export class TranscriptionController {
       candidatesTokenCount: result.usage.candidatesTokenCount,
       thoughtsTokenCount: result.usage.thoughtsTokenCount,
       toolUsePromptTokenCount: result.usage.toolUsePromptTokenCount,
+      cachedContentTokenCount: result.usage.cachedContentTokenCount,
       totalTokenCount: result.usage.totalTokenCount,
     });
   }

@@ -13,7 +13,7 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
   - Detected audio filename and size
   - Audio preparation status
   - API request start/completion times
-  - Gemini usage logs (prompt/output/total tokens; the transcription model reports its output as 0)
+  - Gemini usage logs (prompt/output/total tokens, plus cached tokens when the API reports them; the transcription model reports its output as 0)
   - Classification and summarization status, with the prompt that was sent; edit it and summarize again from the panel
   - Cancel button to stop upload/API request in progress
   - Success/error result
