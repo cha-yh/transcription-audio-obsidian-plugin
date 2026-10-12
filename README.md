@@ -53,11 +53,13 @@ Transcription — always done by Google's dedicated speech-to-text model, `gemin
 
 Summary:
 
-- Summarize transcript (default: on): transcription is always created; turn this off to create and link only the raw transcript.
+- Summarize after transcription (default: on): Summarize automatically once a transcript is created. When off, only the transcript is saved and linked; the "Summarize transcript" command still works, so the summary settings below always stay visible.
 - Model: The model that writes the summary (`gemini-3.8-flash`(default), `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
-- Default prompt: Customize the instruction used to summarize transcripts and as the fallback when a category does not match.
-- Category classification: When enabled, the matching category prompt is used. The `General` category is not included; unmatched transcripts use the default prompt.
+- Summary prompt: which instruction writes the summary.
+  - Category classification: When enabled, each transcript is classified first and the matching category prompt is used. The `General` category is not included; unmatched transcripts use the default prompt.
+  - Default prompt: Used for every summary when classification is off, and when no category matches.
+  - Category prompts: Shown while classification is on.
 
 Run history:
 
@@ -74,7 +76,7 @@ Run history:
    <img alt="Image" src="https://github.com/user-attachments/assets/254e3621-4733-4961-ab90-ce58792d6cc6" />
 4. A progress panel will automatically open in the right sidebar, showing real-time status updates including file upload progress, API request status, and transcription progress.
    <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
-5. When complete, a link to the transcript file is inserted at your starting cursor position. When `Summarize transcript` is on, the summary is written to its own file next to the transcript (`_summary_<audio name>_<time>.md`) and embedded under the link, e.g. `![[_summary_Recording_2026-10-12T00-23-21#Summary]]`.
+5. When complete, a link to the transcript file is inserted at your starting cursor position. When `Summarize after transcription` is on, the summary is written to its own file next to the transcript (`_summary_<audio name>_<time>.md`) and embedded under the link, e.g. `![[_summary_Recording_2026-10-12T00-23-21#Summary]]`.
 
 To summarize an existing transcript, run "Summarize transcript" in either of two places. Its progress and log appear in the panel like any other run.
 
@@ -85,7 +87,7 @@ In the panel, the summary section shows the prompt that was sent. Edit it and pr
 
 If classification or summarization fails, its row in the summary section gets a Retry button. While the run is still waiting, Retry continues it. After the run has ended (the wait timed out, it was cancelled, or a reload interrupted it), Retry finishes what was left: the summary file and, for a run started from a note, the transcript link and summary embed at the original cursor.
 
-You can also open the audio file itself (mp3, mp4, mpeg, mpga, m4a, wav, webm) and run "Transcribe audio" from the command palette. With no note to write into, this only creates the transcript file next to the audio; the summary step is skipped even when `Summarize transcript` is on.
+You can also open the audio file itself (mp3, mp4, mpeg, mpga, m4a, wav, webm) and run "Transcribe audio" from the command palette. With no note to write into, this only creates the transcript file next to the audio; the summary step is skipped even when `Summarize after transcription` is on.
 
 To bring the panel back later, run the command "Open progress panel". It reveals the panel in the right sidebar and restores the saved run history.
 

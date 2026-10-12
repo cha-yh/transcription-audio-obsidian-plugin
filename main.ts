@@ -368,12 +368,6 @@ class TranscriptionSettingTab extends PluginSettingTab {
   }
 
   private displayCategorySettings(containerEl: HTMLElement): void {
-    this.displayDescriptionBlock(
-      containerEl,
-      "Categories",
-      "AI classifies each transcript into a category, then uses that category's prompt for summarization."
-    );
-
     const categories = this.plugin.settings.categories;
 
     for (let i = 0; i < categories.length; i++) {
@@ -543,14 +537,36 @@ class TranscriptionSettingTab extends PluginSettingTab {
       });
   }
   /**
-   * Everything that only matters once a summary is produced. Kept apart
-   * from display() so that a setting unrelated to summarization cannot be
-   * hidden by this condition, which is what happened to run history.
+   * Which prompt writes the summary: the classification switch first, then the
+   * default prompt, then the category prompts classification chooses from.
    */
-  private displaySummarySettings(containerEl: HTMLElement): void {
+  private displaySummaryPromptSettings(containerEl: HTMLElement): void {
+    this.displayDescriptionBlock(
+      containerEl,
+      "Summary prompt",
+      "The instruction the summary is written with. With category classification on, each transcript is classified first and summarized with its category's prompt."
+    );
+
+    new Setting(containerEl)
+      .setName("Category classification")
+      .setDesc(
+        "Classify each transcript and use the matching category prompt. The default prompt is used when no category matches."
+      )
+      .addToggle((toggle) => {
+        toggle
+          .setValue(this.plugin.settings.enableCategoryClassification)
+          .onChange(async (value) => {
+            this.plugin.settings.enableCategoryClassification = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+
     new Setting(containerEl)
       .setName("Default prompt")
-      .setDesc("Used for summarization and whenever no category matches.")
+      .setDesc(
+        "Used for every summary when category classification is off, and when no category matches."
+      )
       .addTextArea((text) => {
         text.inputEl.classList.add("transcription-audio-setting-text-area");
         text
@@ -571,21 +587,6 @@ class TranscriptionSettingTab extends PluginSettingTab {
           new Notice("Prompt reset to default.");
           this.display();
         });
-      });
-
-    new Setting(containerEl)
-      .setName("Category classification")
-      .setDesc(
-        "Classify each transcript and use the matching category prompt. The default prompt is used when no category matches."
-      )
-      .addToggle((toggle) => {
-        toggle
-          .setValue(this.plugin.settings.enableCategoryClassification)
-          .onChange(async (value) => {
-            this.plugin.settings.enableCategoryClassification = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
       });
 
     if (this.plugin.settings.enableCategoryClassification) {
@@ -746,22 +747,21 @@ class TranscriptionSettingTab extends PluginSettingTab {
       "Turns the transcript into a structured note with a general-purpose model."
     );
 
+    // Everything below stays visible either way: the Summarize transcript
+    // command uses it whether or not summaries run automatically
     new Setting(containerEl)
-      .setName("Summarize transcript")
-      .setDesc("A transcript is always created. Turn this off to save only the transcript.")
+      .setName("Summarize after transcription")
+      .setDesc(
+        "Summarize automatically once a transcript is created. When off, only the transcript is saved; you can still summarize it later with the Summarize transcript command."
+      )
       .addToggle((toggle) => {
         toggle
           .setValue(this.plugin.settings.summarizeTranscript)
           .onChange(async (value) => {
             this.plugin.settings.summarizeTranscript = value;
             await this.plugin.saveSettings();
-            this.display();
           });
       });
-
-    if (!this.plugin.settings.summarizeTranscript) {
-      return;
-    }
 
     new Setting(containerEl)
       .setName("Model")
@@ -780,7 +780,7 @@ class TranscriptionSettingTab extends PluginSettingTab {
         });
       });
 
-    this.displaySummarySettings(containerEl);
+    this.displaySummaryPromptSettings(containerEl);
   }
 
   display(): void {
