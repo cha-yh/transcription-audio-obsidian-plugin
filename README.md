@@ -99,21 +99,33 @@ Run history is written to `progress-sessions.json` inside the plugin's own folde
 
 ## Changelog
 
-### Version 0.9.0
+### Version 0.10.0
 
-- **Dedicated transcription model**
-  - Transcription now always runs on Google's speech-to-text model, `gemini-3.5-transcribe`. The `Model` setting now picks only the summary model
-  - This model does not follow prompts, so the transcription prompt is gone. Without speaker labels the transcript comes back as one block of text
-- **Transcription options**
-  - `Mode`: Verbatim (default) keeps fillers and false starts; Smart removes them and tidies punctuation and lists
-  - `Speaker labels`: a labelled paragraph per speaker, up to 8. Labels restart in every 20-minute chunk of a recording over 30 minutes
-  - `Timestamps`: each paragraph starts with its time in the recording
-  - `Custom vocabulary` and `Language hints` help with names, jargon and language detection
-  - Options the API cannot combine are greyed out, with the reason in their description
-- **Settings layout**
-  - Settings are grouped into General, Transcription, Summary and Run history. The summary model shows only while `Summarize transcript` is on
+- **Progress panel redesign**
+  - Each run gets a progress area under its status row: the speech chart (a placeholder while the audio is prepared), and every chunk's upload, transcription, done or failed state with Retry and Transcribe buttons
+  - The log moves inside that area with a date and time on every line. Click the status row to fold the area
+  - The info rows are now Audio, Target, Transcript and Summary
+  <img height="300" alt="Progress panel" src="https://github.com/user-attachments/assets/96f0586a-989e-4bb8-8e4e-02e55cfaf412" />
+- **Summary files**
+  - The summary is written to its own `_summary_<audio name>_<time>.md` next to the transcript, and the note gets `![[…#Summary]]` under the transcript link instead of the pasted text
+  - The panel shows classification and summarization with the prompt that was sent. Edit it and summarize again to rewrite the summary file; Retry a failed step, even after the run has ended
+- **New ways to run**
+  - `Transcribe audio` works from an open audio file and saves only the transcript
+  - New `Summarize transcript` command: from a transcript file it saves only a summary file; from a note linking a transcript it also embeds the summary under the link
+- **Settings**
+  - `Summarize transcript` is now `Summarize after transcription` and only decides whether a summary runs automatically. The summary settings always stay visible
+  - Category classification, the default prompt and the category prompts are grouped under `Summary prompt`
+  - Options the API rejects together are hidden: Smart mode hides speaker labels and timestamps, and either of those hides custom vocabulary
+- **Lower summary cost**
+  - Classification and summarization now share the transcript as a common prefix, so the summary request can reuse Gemini's implicit cache. Usage logs show cached tokens
 - **Heads-up**
-  - On a Free Tier API key this model allows 10,000 input tokens per minute — about 7 minutes of audio. A recording over 30 minutes is sent as parallel chunks and can hit that limit
+  - Notes now embed the summary file rather than containing the summary text. Earlier notes are not changed
+
+### Version 0.9.0 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.9.0)
+
+- **Dedicated transcription model**: transcription always runs on `gemini-3.5-transcribe`
+- **Transcription options**: mode, speaker labels, timestamps, custom vocabulary and language hints
+- **Settings layout**: grouped into General, Transcription, Summary and Run history
 
 ### Version 0.8.1 — [release notes](https://github.com/cha-yh/transcription-audio-obsidian-plugin/releases/tag/0.8.1)
 
