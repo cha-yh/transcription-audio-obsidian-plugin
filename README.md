@@ -6,14 +6,15 @@ Turn your audio into structured Markdown notes inside Obsidian. This plugin dete
 
 - Smart audio detection from links or embeds in the active note
 - Transcription with Google's dedicated speech-to-text model (`gemini-3.5-transcribe`), with optional speaker labels, timestamps, custom vocabulary and language hints
-- Optional summarization of the transcript with a Gemini model of your choice, with category-specific prompts
+- Optional summarization of the transcript with a Gemini model of your choice, with category-specific prompts, saved to its own summary file
 - Long-audio transcription with time-based chunking and chunk retry handling
 - Reusable transcript file creation and transcript file links
 - Progress panel (sidebar) with live status:
   - Detected audio filename and size
   - Audio preparation status
   - API request start/completion times
-  - Gemini usage logs (prompt/output/total tokens; the transcription model reports its output as 0)
+  - Gemini usage logs (prompt/output/total tokens, plus cached tokens when the API reports them; the transcription model reports its output as 0)
+  - Classification and summarization status, with the prompt that was sent; edit it and summarize again from the panel
   - Cancel button to stop upload/API request in progress
   - Success/error result
   - Records kept across plugin reloads and updates, each stamped with when the run started and removable individually
@@ -52,11 +53,13 @@ Transcription — always done by Google's dedicated speech-to-text model, `gemin
 
 Summary:
 
-- Summarize transcript (default: on): transcription is always created; turn this off to create and link only the raw transcript.
+- Summarize after transcription (default: on): Summarize automatically once a transcript is created. When off, only the transcript is saved and linked; the "Summarize transcript" command still works, so the summary settings below always stay visible.
 - Model: The model that writes the summary (`gemini-3.8-flash`(default), `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, `gemini-3-flash-preview`)
 - `gemini-3-pro-preview` is deprecated by Google and shuts down on March 9, 2026. Existing settings are automatically migrated to `gemini-3.1-pro-preview`.
-- Default prompt: Customize the instruction used to summarize transcripts and as the fallback when a category does not match.
-- Category classification: When enabled, the matching category prompt is used. The `General` category is not included; unmatched transcripts use the default prompt.
+- Summary prompt: which instruction writes the summary.
+  - Category classification: When enabled, each transcript is classified first and the matching category prompt is used. The `General` category is not included; unmatched transcripts use the default prompt.
+  - Default prompt: Used for every summary when classification is off, and when no category matches.
+  - Category prompts: Shown while classification is on.
 
 Run history:
 
@@ -73,9 +76,18 @@ Run history:
    <img alt="Image" src="https://github.com/user-attachments/assets/254e3621-4733-4961-ab90-ce58792d6cc6" />
 4. A progress panel will automatically open in the right sidebar, showing real-time status updates including file upload progress, API request status, and transcription progress.
    <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
-5. When complete, a link to the transcript file is inserted at your starting cursor position, followed by the summary when `Summarize transcript` is on.
+5. When complete, a link to the transcript file is inserted at your starting cursor position. When `Summarize after transcription` is on, the summary is written to its own file next to the transcript (`_summary_<audio name>_<time>.md`) and embedded under the link, e.g. `![[_summary_Recording_2026-10-12T00-23-21#Summary]]`.
 
-You can also open the audio file itself (mp3, mp4, mpeg, mpga, m4a, wav, webm) and run "Transcribe audio" from the command palette. With no note to write into, this only creates the transcript file next to the audio; the summary step is skipped even when `Summarize transcript` is on.
+To summarize an existing transcript, run "Summarize transcript" in either of two places. Its progress and log appear in the panel like any other run.
+
+- In a note that links the transcript: place the cursor after the link. The last transcript link before the cursor is used (or the first one in the note), and the summary embed goes under that link's line.
+- In the transcript file (`_transcription_…md`) itself: only a new summary file is created; no note is changed.
+
+In the panel, the summary section shows the prompt that was sent. Edit it and press "Summarize again" to rewrite that run's summary file; notes that embed it update with it.
+
+If classification or summarization fails, its row in the summary section gets a Retry button. While the run is still waiting, Retry continues it. After the run has ended (the wait timed out, it was cancelled, or a reload interrupted it), Retry finishes what was left: the summary file and, for a run started from a note, the transcript link and summary embed at the original cursor.
+
+You can also open the audio file itself (mp3, mp4, mpeg, mpga, m4a, wav, webm) and run "Transcribe audio" from the command palette. With no note to write into, this only creates the transcript file next to the audio; the summary step is skipped even when `Summarize after transcription` is on.
 
 To bring the panel back later, run the command "Open progress panel". It reveals the panel in the right sidebar and restores the saved run history.
 
@@ -83,7 +95,7 @@ To bring the panel back later, run the command "Open progress panel". It reveals
 
 Audio content is sent to Google’s Gemini API for transcription, and the transcript is sent again when it is summarized. The plugin does not store your audio or transcripts outside your vault. Keep your API key secure and review your organization’s data policies before use.
 
-Run history is written to `progress-sessions.json` inside the plugin's own folder, alongside its settings. It holds the progress log — file paths, model names and API error messages — but never your API key or transcript text. Switch off "Keep run history" if you would rather nothing were written. Opening the same vault in two windows at once can leave whichever window writes last as the one that wins.
+Run history is written to `progress-sessions.json` inside the plugin's own folder, alongside its settings. It holds the progress log — file paths, model names, API error messages and the summary prompt that was sent — but never your API key or transcript text. Switch off "Keep run history" if you would rather nothing were written. Opening the same vault in two windows at once can leave whichever window writes last as the one that wins.
 
 ## Changelog
 

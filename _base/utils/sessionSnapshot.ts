@@ -10,6 +10,7 @@ import type {
   PersistedRunProgress,
   PersistedSession,
   PersistedSparkline,
+  PersistedSummaryProgress,
   PersistedSparklineChunk,
   SessionHistoryDoc,
   SessionStatus,
@@ -21,6 +22,7 @@ import {
   toPersistedRunProgress,
   type RunProgress,
 } from "./runProgress";
+import { asStepPhase } from "./summaryProgress";
 
 /**
  * The runtime shape the progress view holds. Same fields as the persisted
@@ -247,6 +249,16 @@ export function toSnapshot(state: SessionRuntimeState): PersistedSession {
     ),
     failedChunks: Array.from(state.failedChunks).sort((a, b) => a - b),
     progress: state.progress ? snapshotProgress(state.progress) : undefined,
+    summary: state.summary
+      ? {
+          classify: state.summary.classify
+            ? { ...state.summary.classify }
+            : undefined,
+          phase: state.summary.phase,
+          prompt: state.summary.prompt,
+          path: state.summary.path,
+        }
+      : undefined,
   };
   return snapshot;
 }
@@ -357,6 +369,28 @@ function parseRunProgress(value: unknown): PersistedRunProgress | undefined {
   };
 }
 
+function parseSummaryProgress(
+  value: unknown
+): PersistedSummaryProgress | undefined {
+  if (!isRecord(value)) return undefined;
+  let classify: PersistedSummaryProgress["classify"];
+  if (isRecord(value.classify)) {
+    const phase = asStepPhase(value.classify.phase);
+    if (phase) {
+      classify = {
+        phase,
+        category: asOptionalString(value.classify.category),
+      };
+    }
+  }
+  return {
+    classify,
+    phase: asStepPhase(value.phase),
+    prompt: asOptionalString(value.prompt),
+    path: asOptionalString(value.path),
+  };
+}
+
 function parseChunk(value: unknown): PersistedSession["chunk"] {
   if (!isRecord(value)) return undefined;
   return {
@@ -411,6 +445,7 @@ function parseSession(value: unknown): PersistedSession | null {
     rerunDisabled: asBoolean(value.rerunDisabled, true),
     chunk: parseChunk(value.chunk),
     progress: parseRunProgress(value.progress),
+    summary: parseSummaryProgress(value.summary),
     logHistory,
     failedChunks,
   };

@@ -134,38 +134,6 @@
   border-radius: 4px;
 }
 
-.transcription-audio-retry-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0;
-}
-
-.transcription-audio-retry-label {
-  font-size: 12px;
-  color: var(--text-error);
-}
-
-.transcription-audio-retry-button {
-  padding: 2px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  border: 1px solid var(--text-error);
-  background-color: transparent;
-  color: var(--text-error);
-  border-radius: 4px;
-}
-
-.transcription-audio-retry-button:hover:enabled {
-  background-color: var(--text-error);
-  color: var(--text-on-accent);
-}
-
-.transcription-audio-retry-button:disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-
 .transcription-audio-cancel-button:hover:enabled {
   background-color: var(--background-modifier-hover);
 }
@@ -514,6 +482,45 @@
 .transcription-audio-progress-row-skipped .transcription-audio-progress-dot {
   background-color: transparent;
   border: 1px solid currentColor;
+}
+
+/* Classification, summarization and the prompt they used */
+.transcription-audio-summary {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.transcription-audio-summary-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.transcription-audio-summary-prompt {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.transcription-audio-summary-prompt > summary {
+  cursor: pointer;
+}
+
+.transcription-audio-summary-prompt-input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  font-size: 11px;
+  font-family: var(--font-monospace);
+  resize: vertical;
+}
+
+.transcription-audio-summary-prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
 }
 
 .transcription-audio-progress-logs {

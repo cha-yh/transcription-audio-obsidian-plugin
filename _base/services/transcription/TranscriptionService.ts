@@ -16,6 +16,8 @@ const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
 
 export interface TranscriptionUsage {
   promptTokenCount?: number;
+  /** Input tokens served from Gemini's implicit cache. */
+  cachedContentTokenCount?: number;
   candidatesTokenCount?: number;
   thoughtsTokenCount?: number;
   toolUsePromptTokenCount?: number;
@@ -106,11 +108,24 @@ export function extractInteractionUsage(payload: unknown): TranscriptionUsage {
     typeof usage[key] === "number" ? (usage[key] as number) : undefined;
   return {
     promptTokenCount: count("total_input_tokens"),
+    cachedContentTokenCount: count("total_cached_tokens"),
     candidatesTokenCount: count("total_output_tokens"),
     thoughtsTokenCount: count("total_thought_tokens"),
     toolUsePromptTokenCount: count("total_tool_use_tokens"),
     totalTokenCount: count("total_tokens"),
   };
+}
+
+/**
+ * The opening every request about a finished transcript shares, byte for
+ * byte. Classification and summarization send the same transcript to the same
+ * model moments apart; with it in front and the instructions after, the
+ * second request can hit Gemini's implicit cache, which matches on a common
+ * prefix. Instructions placed first, as they used to be, made every prefix
+ * different.
+ */
+export function transcriptRequestPrefix(transcriptionText: string): string {
+  return `Transcript:\n${transcriptionText}\n\n`;
 }
 
 export class TranscriptionService {
@@ -119,6 +134,7 @@ export class TranscriptionService {
   private extractUsage(response: {
     usageMetadata?: {
       promptTokenCount?: number;
+      cachedContentTokenCount?: number;
       candidatesTokenCount?: number;
       thoughtsTokenCount?: number;
       toolUsePromptTokenCount?: number;
@@ -128,6 +144,10 @@ export class TranscriptionService {
     const usage = response.usageMetadata;
     return {
       promptTokenCount: usage?.promptTokenCount,
+      // The API leaves the field out on a cache miss rather than sending 0
+      cachedContentTokenCount: usage
+        ? usage.cachedContentTokenCount ?? 0
+        : undefined,
       candidatesTokenCount: usage?.candidatesTokenCount,
       thoughtsTokenCount: usage?.thoughtsTokenCount,
       toolUsePromptTokenCount: usage?.toolUsePromptTokenCount,
@@ -460,12 +480,12 @@ export class TranscriptionService {
   ): Promise<TranscriptionResult> {
     const categoryList = categoryNames.map((n) => `- ${n}`).join("\n");
     const prompt =
-      `Classify the following transcript into exactly one of these categories:\n${categoryList}\n\n` +
+      transcriptRequestPrefix(transcriptionText) +
+      `Classify the transcript above into exactly one of these categories:\n${categoryList}\n\n` +
       `Rules:\n` +
       `- Respond with ONLY the category name from the list above.\n` +
       `- Do not add any explanation, punctuation, or extra text.\n` +
-      `- If the transcript does not clearly fit any category, respond with "Default".\n\n` +
-      `Transcript:\n${transcriptionText}`;
+      `- If the transcript does not clearly fit any category, respond with "Default".`;
 
     if (!apiKey) {
       throw new Error("API Key is not provided.");
@@ -533,7 +553,7 @@ export class TranscriptionService {
         ai.models.generateContent({
           model: model,
           contents: createUserContent([
-            `${prompt}\n\n${transcriptionText}`,
+            transcriptRequestPrefix(transcriptionText) + prompt,
           ]),
           config: {
             abortSignal,

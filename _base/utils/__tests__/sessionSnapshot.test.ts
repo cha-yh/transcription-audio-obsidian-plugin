@@ -155,6 +155,46 @@ describe("log timestamps in the saved record", () => {
   });
 });
 
+describe("summary progress in the saved record", () => {
+  it("round-trips classification, prompt and summary file", () => {
+    const summary = {
+      classify: { phase: "done" as const, category: "Meeting" },
+      phase: "done" as const,
+      prompt: "Summarize briefly",
+      path: "Audio/_summary_a_2026-10-12T00-23-21.md",
+    };
+    const written = JSON.parse(
+      JSON.stringify(createHistoryDoc([toSnapshot(runtimeState({ summary }))]))
+    );
+    const [parsed] = parseSessionHistory(written).sessions;
+    expect(parsed.summary).toEqual(summary);
+    expect(fromSnapshot(parsed).summary).toEqual(summary);
+  });
+
+  it("drops step phases it cannot read instead of the record", () => {
+    const [parsed] = parseSessionHistory({
+      version: 1,
+      sessions: [
+        {
+          ...(progressHistoryV1.sessions[0] as PersistedSession),
+          summary: { classify: { phase: "later" }, phase: "later", prompt: 3 },
+        },
+      ],
+    }).sessions;
+    expect(parsed.summary).toEqual({
+      classify: undefined,
+      phase: undefined,
+      prompt: undefined,
+      path: undefined,
+    });
+  });
+
+  it("leaves older records without one", () => {
+    const [parsed] = parseSessionHistory(progressHistoryV1).sessions;
+    expect(parsed.summary).toBeUndefined();
+  });
+});
+
 describe("run progress in the saved record", () => {
   it("round-trips through the file with buckets rounded", () => {
     const progress = createRunProgress();

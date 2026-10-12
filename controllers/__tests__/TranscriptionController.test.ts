@@ -530,3 +530,232 @@ describe("TranscriptionController — pure helpers", () => {
     });
   });
 });
+
+describe("summaries", () => {
+  const transcriptPath = "Audio/_transcription_memo_2026-10-11T10-00-00.md";
+  const transcriptContent =
+    '---\naudio: "Audio/memo.m4a"\n---\n\n## Transcription\n\n%%chunk:1%%\nhello there\n%%/chunk:1%%\n';
+
+  const options = {
+    apiKey: "test-key",
+    prompt: "Default prompt",
+    model: "gemini-3.8-flash",
+    transcriptionModel: "gemini-3.5-transcribe",
+    transcriptionOptions: {
+      transcriptionMode: "verbatim",
+      speakerDiarization: false,
+      wordTimestamps: false,
+      customVocabulary: "",
+      languageCodes: "",
+    },
+    summarizeTranscript: false,
+    enableCategoryClassification: false,
+    categories: [],
+  } as any;
+
+  async function getPublished() {
+    const { progressBus } = await import("../../_base/utils/progressBus");
+    return (progressBus.publish as any).mock.calls.map((c: any[]) => c[0]);
+  }
+
+  function setup() {
+    const app = createMockApp();
+    app.vault.modify = vi.fn();
+    const transcriptFile = Object.assign(Object.create(MockTFile.prototype), {
+      path: transcriptPath,
+      name: transcriptPath.split("/").pop(),
+    });
+    const files: Record<string, unknown> = { [transcriptPath]: transcriptFile };
+    app.vault.getAbstractFileByPath.mockImplementation(
+      (path: string) => files[path] ?? null
+    );
+    app.vault.read.mockResolvedValue(transcriptContent);
+    app.metadataCache.getFileCache.mockReturnValue({
+      frontmatter: { audio: "Audio/memo.m4a" },
+    });
+    const ctrl = new TranscriptionController(
+      app,
+      "test-progress-view",
+      () => options
+    );
+    (ctrl as any).openProgressView = vi.fn();
+    const summarizeText = vi
+      .fn()
+      .mockResolvedValue({ text: "# Gist\nShort.", usage: {} });
+    (ctrl as any).transcriptionService.summarizeText = summarizeText;
+    return { app, ctrl, transcriptFile, files, summarizeText };
+  }
+
+  beforeEach(async () => {
+    const { progressBus } = await import("../../_base/utils/progressBus");
+    (progressBus.publish as any).mockClear();
+  });
+
+  it("summarizes an open transcript into a new summary file only", async () => {
+    const { app, ctrl, transcriptFile, summarizeText } = setup();
+
+    await ctrl.summarizeTranscriptFile(transcriptFile, options);
+
+    // Chunk markers never reach the model
+    expect(summarizeText.mock.calls[0][2]).toBe("hello there");
+    expect(app.vault.create).toHaveBeenCalledTimes(1);
+    const [path, content] = app.vault.create.mock.calls[0];
+    expect(path).toMatch(
+      /^Audio\/_summary_memo_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.md$/
+    );
+    expect(content).toContain("# Summary\n\n## Gist\nShort.");
+
+    const stages = (await getPublished()).map((e: any) => e.stage);
+    expect(stages).toContain("transcript-file-selected");
+    expect(stages).toContain("summary-file-created");
+    expect(stages[stages.length - 1]).toBe("success");
+    expect(
+      (await getPublished()).find(
+        (e: any) => e.stage === "summarization-step-start"
+      ).prompt
+    ).toBe("Default prompt");
+  });
+
+  it("embeds the summary under the transcript link when run from a note", async () => {
+    const { ctrl, transcriptFile } = setup();
+    const insertAt = { path: "Meeting.md", line: 3, ch: 48 };
+
+    await ctrl.summarizeTranscriptFile(transcriptFile, options, insertAt);
+
+    const append = (ctrl as any).obsidianInteractor.appendTextToFile;
+    expect(append).toHaveBeenCalledTimes(1);
+    const [path, line, ch, text] = append.mock.calls[0];
+    expect([path, line, ch]).toEqual(["Meeting.md", 3, 48]);
+    expect(text).toMatch(
+      /^\n\n!\[\[_summary_memo_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}#Summary\]\]$/
+    );
+    expect(await getPublished()).toContainEqual({
+      stage: "target-file-selected",
+      ...insertAt,
+    });
+  });
+
+  it("leaves notes alone when run from the transcript file", async () => {
+    const { ctrl, transcriptFile } = setup();
+    await ctrl.summarizeTranscriptFile(transcriptFile, options);
+    expect(
+      (ctrl as any).obsidianInteractor.appendTextToFile
+    ).not.toHaveBeenCalled();
+  });
+
+  it("rewrites the card's summary file with an edited prompt", async () => {
+    const { app, ctrl, files, summarizeText } = setup();
+    const summaryPath = "Audio/_summary_memo_2026-10-12T00-23-21.md";
+    files[summaryPath] = Object.assign(Object.create(MockTFile.prototype), {
+      path: summaryPath,
+    });
+
+    await (ctrl as any).resummarize({
+      transcriptPath,
+      summaryPath,
+      prompt: "Only the action items",
+    });
+
+    expect(summarizeText.mock.calls[0][1]).toBe("Only the action items");
+    expect(app.vault.create).not.toHaveBeenCalled();
+    expect(app.vault.modify).toHaveBeenCalledTimes(1);
+    expect(app.vault.modify.mock.calls[0][0].path).toBe(summaryPath);
+    expect(await getPublished()).toContainEqual({
+      stage: "summary-file-created",
+      path: summaryPath,
+    });
+  });
+
+  it("finishes a run that ended without its summary, note insert included", async () => {
+    const { app, ctrl, summarizeText } = setup();
+    const target = { path: "Meeting.md", line: 4, ch: 0 };
+
+    await (ctrl as any).finishSummary({ transcriptPath, target });
+
+    // No prompt given: the default prompt, through the normal pipeline
+    expect(summarizeText.mock.calls[0][1]).toBe("Default prompt");
+    expect(app.vault.create).toHaveBeenCalledTimes(1);
+    const append = (ctrl as any).obsidianInteractor.appendTextToFile;
+    const [path, line, ch, text] = append.mock.calls[0];
+    expect([path, line, ch]).toEqual(["Meeting.md", 4, 0]);
+    expect(text).toMatch(
+      /^\[\[_transcription_memo_2026-10-11T10-00-00\.md\]\]\n\n!\[\[_summary_memo_[^\]]+#Summary\]\]$/
+    );
+    const stages = (await getPublished()).map((e: any) => e.stage);
+    expect(stages[stages.length - 1]).toBe("success");
+  });
+
+  it("reports a failed finish without waiting, so the panel can offer Retry again", async () => {
+    const { app, ctrl, summarizeText } = setup();
+    summarizeText.mockReset().mockRejectedValue(new Error("overloaded"));
+
+    await (ctrl as any).finishSummary({
+      transcriptPath,
+      prompt: "Edited prompt",
+      target: { path: "Meeting.md", line: 4, ch: 0 },
+    });
+
+    expect(summarizeText.mock.calls[0][1]).toBe("Edited prompt");
+    expect(app.vault.create).not.toHaveBeenCalled();
+    expect(
+      (ctrl as any).obsidianInteractor.appendTextToFile
+    ).not.toHaveBeenCalled();
+    const published = await getPublished();
+    expect(published).toContainEqual({
+      stage: "summarization-step-failed",
+      message: "overloaded",
+    });
+    expect(published[published.length - 1]).toEqual({
+      stage: "error",
+      message: "overloaded",
+    });
+    expect((ctrl as any).writing).toBe(false);
+  });
+
+  it("refuses to summarize again while another run is going", async () => {
+    const { ctrl, summarizeText } = setup();
+    (ctrl as any).writing = true;
+
+    await (ctrl as any).resummarize({ transcriptPath, prompt: "p" });
+
+    expect(summarizeText).not.toHaveBeenCalled();
+    expect(await getPublished()).toContainEqual({
+      stage: "summarization-step-failed",
+      message: "Another run is in progress.",
+    });
+  });
+
+  it("retries a failed summary with the prompt sent from the panel", async () => {
+    const { progressBus } = await import("../../_base/utils/progressBus");
+    const listeners: ((e: any) => void)[] = [];
+    (progressBus.subscribe as any).mockImplementation((fn: any) => {
+      listeners.push(fn);
+      return vi.fn();
+    });
+    const { ctrl, summarizeText } = setup();
+    summarizeText
+      .mockReset()
+      .mockRejectedValueOnce(new Error("overloaded"))
+      .mockResolvedValueOnce({ text: "ok", usage: {} });
+
+    const result = (ctrl as any).runSummarizationWithRetry(
+      "test-key",
+      "First prompt",
+      "hello",
+      "gemini-3.8-flash",
+      new AbortController().signal,
+      () => {}
+    );
+    await vi.waitFor(() => expect(listeners.length).toBeGreaterThan(1));
+    for (const listener of listeners) {
+      listener({ stage: "summarization-retry-requested", prompt: "Shorter" });
+    }
+
+    await expect(result).resolves.toBe("ok");
+    expect(summarizeText.mock.calls.map((c: any[]) => c[1])).toEqual([
+      "First prompt",
+      "Shorter",
+    ]);
+    (progressBus.subscribe as any).mockImplementation(() => vi.fn());
+  });
+});
