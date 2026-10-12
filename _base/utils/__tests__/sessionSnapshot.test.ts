@@ -3,6 +3,7 @@ import {
   clampHistoryLimit,
   isRemovableStatus,
   staleRetries,
+  createHistoryDoc,
   createInitialSession,
   createSessionId,
   demoteRunning,
@@ -17,6 +18,7 @@ import {
   type SessionRuntimeState,
 } from "../sessionSnapshot";
 import type { PersistedSession } from "_base/types/sessionHistory";
+import { createRunProgress } from "../runProgress";
 import { progressHistoryV1 } from "../../../tests/fixtures/progressHistoryV1";
 
 function runtimeState(
@@ -121,6 +123,95 @@ describe("toSnapshot", () => {
     );
     expect(serialized).not.toContain("apiKey");
     expect(serialized).not.toContain("AIza");
+  });
+});
+
+describe("log timestamps in the saved record", () => {
+  it("round-trips when each line was logged", () => {
+    const written = JSON.parse(
+      JSON.stringify(
+        createHistoryDoc([
+          toSnapshot(
+            runtimeState({ logHistory: [{ text: "Uploading", atMs: 1757480660000 }] })
+          ),
+        ])
+      )
+    );
+    const [parsed] = parseSessionHistory(written).sessions;
+    expect(parsed.logHistory[0].atMs).toBe(1757480660000);
+  });
+
+  it("stamps the first line of a new run with its start time", () => {
+    expect(createInitialSession(1757480652000, 0).logHistory[0].atMs).toBe(
+      1757480652000
+    );
+  });
+
+  it("reads lines written before timestamps were kept", () => {
+    const [parsed] = parseSessionHistory(progressHistoryV1).sessions;
+    expect(parsed.logHistory.every((entry) => entry.atMs === undefined)).toBe(
+      true
+    );
+  });
+});
+
+describe("run progress in the saved record", () => {
+  it("round-trips through the file with buckets rounded", () => {
+    const progress = createRunProgress();
+    progress.sparkline = {
+      buckets: [0.12345],
+      totalMs: 60000,
+      chunks: [
+        { chunkIndex: 1, startMs: 0, endMs: 60000, speechRatio: 0.5, skipped: false },
+      ],
+    };
+    progress.chunkPhases.set(1, "done");
+
+    const written = JSON.parse(
+      JSON.stringify(createHistoryDoc([toSnapshot(runtimeState({ progress }))]))
+    );
+    const [parsed] = parseSessionHistory(written).sessions;
+
+    expect(parsed.progress?.sparkline?.buckets).toEqual([0.123]);
+    expect(parsed.progress?.chunks).toEqual([{ chunkIndex: 1, phase: "done" }]);
+    expect(fromSnapshot(parsed).progress?.chunkPhases.get(1)).toBe("done");
+  });
+
+  it("resumes inside the transcription step when reopened mid-run", () => {
+    const record = toSnapshot(
+      runtimeState({ status: "running", progress: createRunProgress() })
+    );
+    expect(fromSnapshot(record).progress?.inTranscriptionStep).toBe(true);
+    expect(
+      fromSnapshot({ ...record, transcriptPath: "a.md" }).progress
+        ?.inTranscriptionStep
+    ).toBe(false);
+  });
+
+  it("leaves records written before the progress area without one", () => {
+    const [parsed] = parseSessionHistory(progressHistoryV1).sessions;
+    expect(parsed.progress).toBeUndefined();
+    expect(fromSnapshot(parsed).progress).toBeUndefined();
+  });
+
+  it("drops chunk entries it cannot read instead of the record", () => {
+    const [parsed] = parseSessionHistory({
+      version: 1,
+      sessions: [
+        {
+          ...(progressHistoryV1.sessions[0] as PersistedSession),
+          progress: {
+            chunks: [
+              { chunkIndex: 1, phase: "done" },
+              { chunkIndex: 2, phase: "from-a-newer-version" },
+              { phase: "done" },
+            ],
+          },
+        },
+      ],
+    }).sessions;
+
+    expect(parsed.progress?.chunks).toEqual([{ chunkIndex: 1, phase: "done" }]);
   });
 });
 

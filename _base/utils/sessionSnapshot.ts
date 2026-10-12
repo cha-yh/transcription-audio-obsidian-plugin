@@ -7,6 +7,7 @@ import {
 } from "_base/constants/sessionHistory";
 import type {
   PersistedLogEntry,
+  PersistedRunProgress,
   PersistedSession,
   PersistedSparkline,
   PersistedSparklineChunk,
@@ -14,6 +15,12 @@ import type {
   SessionStatus,
 } from "_base/types/sessionHistory";
 import { formatLocaleDateTime } from "./format";
+import {
+  asChunkPhase,
+  fromPersistedRunProgress,
+  toPersistedRunProgress,
+  type RunProgress,
+} from "./runProgress";
 
 /**
  * The runtime shape the progress view holds. Same fields as the persisted
@@ -27,8 +34,12 @@ export interface RuntimeLogEntry extends PersistedLogEntry {
 }
 
 export interface SessionRuntimeState
-  extends Omit<PersistedSession, "logHistory" | "failedChunks" | "chunk"> {
+  extends Omit<
+    PersistedSession,
+    "logHistory" | "failedChunks" | "chunk" | "progress"
+  > {
   logHistory: RuntimeLogEntry[];
+  progress?: RunProgress;
   failedChunks: Set<number>;
   pendingRetryChunks: Set<number>;
   /**
@@ -137,7 +148,10 @@ export function createInitialSession(
     isCancellable: true,
     isLogExpanded: false,
     logHistory: [
-      { text: `Log start: ${formatLocaleDateTime(new Date(startedAtMs))}` },
+      {
+        text: `Log start: ${formatLocaleDateTime(new Date(startedAtMs))}`,
+        atMs: startedAtMs,
+      },
     ],
     failedChunks: [],
   };
@@ -163,6 +177,16 @@ export function trimLogHistory(
     { text: `... ${dropped} earlier log lines trimmed` },
     ...entries.slice(dropped),
   ];
+}
+
+function snapshotProgress(progress: RunProgress): PersistedRunProgress {
+  const persisted = toPersistedRunProgress(progress);
+  return {
+    ...persisted,
+    sparkline: persisted.sparkline
+      ? snapshotSparkline(persisted.sparkline)
+      : undefined,
+  };
 }
 
 function snapshotSparkline(sparkline: PersistedSparkline): PersistedSparkline {
@@ -213,6 +237,7 @@ export function toSnapshot(state: SessionRuntimeState): PersistedSession {
     logHistory: trimLogHistory(
       state.logHistory.map((entry) => ({
         text: entry.text,
+        atMs: entry.atMs,
         retryChunkIndex: entry.retryChunkIndex,
         retryStale: entry.retryStale,
         sparkline: entry.sparkline
@@ -221,6 +246,7 @@ export function toSnapshot(state: SessionRuntimeState): PersistedSession {
       }))
     ),
     failedChunks: Array.from(state.failedChunks).sort((a, b) => a - b),
+    progress: state.progress ? snapshotProgress(state.progress) : undefined,
   };
   return snapshot;
 }
@@ -234,9 +260,10 @@ export function toSnapshot(state: SessionRuntimeState): PersistedSession {
  * `staleRetries`, which the store applies at the reload boundary.
  */
 export function fromSnapshot(snapshot: PersistedSession): SessionRuntimeState {
-  const { chunk, ...rest } = snapshot;
+  const { chunk, progress, ...rest } = snapshot;
   return {
     ...rest,
+    progress: progress ? restoreRunProgress(snapshot, progress) : undefined,
     logHistory: snapshot.logHistory.map((entry) => ({
       ...entry,
       retryRunning: false,
@@ -285,9 +312,48 @@ function parseLogEntry(value: unknown): PersistedLogEntry | null {
   if (!isRecord(value) || typeof value.text !== "string") return null;
   return {
     text: value.text,
+    atMs: asOptionalNumber(value.atMs),
     retryChunkIndex: asOptionalNumber(value.retryChunkIndex),
     retryStale: typeof value.retryStale === "boolean" ? value.retryStale : undefined,
     sparkline: parseSparkline(value.sparkline),
+  };
+}
+
+/**
+ * Reopening the sidebar mid-run comes through here too. The transcript file
+ * is announced only once transcription is over, so a running record without
+ * one is still inside that step and its chunk-less events still belong to
+ * chunk 1.
+ */
+function restoreRunProgress(
+  snapshot: PersistedSession,
+  persisted: PersistedRunProgress
+): RunProgress {
+  const progress = fromPersistedRunProgress(persisted);
+  progress.inTranscriptionStep =
+    snapshot.status === "running" && snapshot.transcriptPath === undefined;
+  return progress;
+}
+
+function parseRunProgress(value: unknown): PersistedRunProgress | undefined {
+  if (!isRecord(value)) return undefined;
+  const chunks: PersistedRunProgress["chunks"] = [];
+  for (const rawChunk of Array.isArray(value.chunks) ? value.chunks : []) {
+    if (!isRecord(rawChunk)) continue;
+    const chunkIndex = asOptionalNumber(rawChunk.chunkIndex);
+    // A phase added by a newer version reads as "not started" rather than
+    // costing the whole record.
+    const phase = asChunkPhase(rawChunk.phase);
+    if (chunkIndex === undefined || phase === undefined) continue;
+    chunks.push({ chunkIndex, phase });
+  }
+  return {
+    sparkline: parseSparkline(value.sparkline),
+    chartUnavailable:
+      typeof value.chartUnavailable === "boolean"
+        ? value.chartUnavailable
+        : undefined,
+    chunks,
   };
 }
 
@@ -344,6 +410,7 @@ function parseSession(value: unknown): PersistedSession | null {
     isLogExpanded: asBoolean(value.isLogExpanded, false),
     rerunDisabled: asBoolean(value.rerunDisabled, true),
     chunk: parseChunk(value.chunk),
+    progress: parseRunProgress(value.progress),
     logHistory,
     failedChunks,
   };

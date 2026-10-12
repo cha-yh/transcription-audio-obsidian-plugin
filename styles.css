@@ -86,6 +86,32 @@
   flex: 1;
 }
 
+/* The status row opens the progress area once a run has one */
+.transcription-audio-latest-log.is-toggleable {
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.transcription-audio-latest-log.is-toggleable:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.transcription-audio-progress-toggle {
+  display: inline-flex;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+
+.transcription-audio-progress-toggle.is-expanded {
+  transform: rotate(180deg);
+}
+
+.transcription-audio-log-line-time {
+  flex: none;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
 .transcription-audio-detail-button {
   padding: 2px 8px;
   font-size: 12px;
@@ -191,7 +217,8 @@
 
 .transcription-audio-log-line {
   display: flex;
-  align-items: center;
+  /* Baseline keeps the timestamp level with a wrapped message's first line */
+  align-items: baseline;
   justify-content: space-between;
   gap: 8px;
 }
@@ -283,6 +310,227 @@
 
 .transcription-audio-sparkline-row-label {
   font-variant-numeric: tabular-nums;
+}
+
+/* Progress area: between the status row and the log */
+.transcription-audio-progress {
+  padding: 6px 0 8px;
+}
+
+.transcription-audio-progress-chart {
+  position: relative;
+}
+
+.transcription-audio-progress-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 2px 0 4px;
+}
+
+/* Placeholder bars while the audio is being prepared; heights change from JS */
+.transcription-audio-progress-skeleton {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 48px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.transcription-audio-progress-skeleton-bar {
+  width: 0.8%;
+  min-width: 2px;
+  border-radius: 1px 1px 0 0;
+  background-color: var(--text-faint);
+  transition: height 0.6s ease-in-out;
+}
+
+.transcription-audio-progress-overlays {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.transcription-audio-progress-overlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.transcription-audio-progress-overlay-starting,
+.transcription-audio-progress-overlay-uploading {
+  background-color: var(--text-muted);
+  /* Resting value when reduced motion turns the pulse off */
+  opacity: 0.2;
+  animation: transcription-audio-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.transcription-audio-progress-overlay-transcribing {
+  background-color: var(--interactive-accent);
+  /* Resting value when reduced motion turns the pulse off */
+  opacity: 0.2;
+  animation: transcription-audio-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.transcription-audio-progress-overlay-failed {
+  background-color: var(--text-error);
+  opacity: 0.18;
+}
+
+.transcription-audio-progress-overlay-stopped {
+  background-color: var(--text-faint);
+  opacity: 0.15;
+}
+
+/* Ranges never sent to the model */
+.transcription-audio-progress-overlay-skipped {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--text-warning, #e0a458) 0 1px,
+    transparent 1px 5px
+  );
+  opacity: 0.55;
+}
+
+@keyframes transcription-audio-pulse {
+  from {
+    opacity: 0.08;
+  }
+  to {
+    opacity: 0.3;
+  }
+}
+
+/* One segment per chunk, coloured by where that chunk stands */
+.transcription-audio-progress-strip {
+  position: relative;
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background-color: var(--background-modifier-border);
+}
+
+.transcription-audio-progress-segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-right: 1px solid var(--background-primary);
+}
+
+.transcription-audio-progress-starting,
+.transcription-audio-progress-uploading {
+  background-color: var(--text-muted);
+  animation: transcription-audio-strip-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.transcription-audio-progress-transcribing {
+  background-color: var(--interactive-accent);
+  animation: transcription-audio-strip-pulse 1.2s ease-in-out infinite alternate;
+}
+
+.transcription-audio-progress-done {
+  background-color: var(--color-green, #4caf50);
+}
+
+.transcription-audio-progress-failed {
+  background-color: var(--text-error);
+}
+
+.transcription-audio-progress-stopped {
+  background-color: var(--text-faint);
+}
+
+.transcription-audio-progress-skipped {
+  background-color: transparent;
+}
+
+@keyframes transcription-audio-strip-pulse {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.transcription-audio-progress-rows {
+  margin-top: 6px;
+}
+
+.transcription-audio-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 1px 0;
+}
+
+.transcription-audio-progress-row-label {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.transcription-audio-progress-row-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Status dot reuses the strip colours */
+.transcription-audio-progress-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--background-modifier-border);
+}
+
+.transcription-audio-progress-row-starting .transcription-audio-progress-dot,
+.transcription-audio-progress-row-uploading .transcription-audio-progress-dot {
+  background-color: var(--text-muted);
+}
+
+.transcription-audio-progress-row-transcribing .transcription-audio-progress-dot {
+  background-color: var(--interactive-accent);
+}
+
+.transcription-audio-progress-row-done .transcription-audio-progress-dot {
+  background-color: var(--color-green, #4caf50);
+}
+
+.transcription-audio-progress-row-failed {
+  color: var(--text-error);
+}
+
+.transcription-audio-progress-row-failed .transcription-audio-progress-dot {
+  background-color: var(--text-error);
+}
+
+.transcription-audio-progress-row-skipped {
+  color: var(--text-warning, #e0a458);
+}
+
+.transcription-audio-progress-row-skipped .transcription-audio-progress-dot {
+  background-color: transparent;
+  border: 1px solid currentColor;
+}
+
+.transcription-audio-progress-logs {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transcription-audio-progress-overlay,
+  .transcription-audio-progress-segment {
+    animation: none;
+  }
+
+  .transcription-audio-progress-skeleton-bar {
+    transition: none;
+  }
 }
 
 .transcription-audio-log-retry-button {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatBytes,
+  formatLogDateTime,
   formatDuration,
   formatTimeRange,
   formatTimestamp,
@@ -125,5 +126,29 @@ describe("formatTimeRange", () => {
 
   it("clamps a negative length to zero", () => {
     expect(formatTimeRange(5000, 1000)).toBe("0:05-0:01 (0:00)");
+  });
+});
+
+describe("formatLogDateTime", () => {
+  it("shows the date and the time down to the second", () => {
+    const text = formatLogDateTime(new Date(2026, 9, 8, 17, 5, 9));
+    expect(text).toMatch(/10/);
+    expect(text).toMatch(/0?8/);
+    expect(text).toMatch(/17/);
+    expect(text).toMatch(/05/);
+    expect(text).toMatch(/09/);
+  });
+
+  it("falls back to toLocaleString when Intl rejects the options", () => {
+    const original = Intl.DateTimeFormat;
+    (Intl as { DateTimeFormat: unknown }).DateTimeFormat = () => {
+      throw new RangeError("unsupported");
+    };
+    try {
+      const date = new Date(2026, 9, 8, 17, 5, 9);
+      expect(formatLogDateTime(date)).toBe(date.toLocaleString());
+    } finally {
+      (Intl as { DateTimeFormat: unknown }).DateTimeFormat = original;
+    }
   });
 });
