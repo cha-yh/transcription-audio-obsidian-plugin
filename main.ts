@@ -545,9 +545,10 @@ class TranscriptionSettingTab extends PluginSettingTab {
   }
 
   /**
-   * The options of the dedicated transcription model. Each one the API cannot
-   * combine with another is greyed out instead of hidden, with the reason in
-   * its description, so the user can see why it has no effect.
+   * The options of the dedicated transcription model. An option the API
+   * cannot combine with the current choice is hidden rather than greyed out,
+   * and the option that rules it out says so in its description.
+   * `effectiveTranscriptionOptions` drops the same values from the request.
    */
   private displayTranscriptionSettings(containerEl: HTMLElement): void {
     const settings = this.plugin.settings;
@@ -585,59 +586,57 @@ class TranscriptionSettingTab extends PluginSettingTab {
         });
       });
 
-    new Setting(containerEl)
-      .setName("Speaker labels")
-      .setDesc(
-        (smart ? "Not available in Smart mode. " : "") +
-          "Starts a new paragraph for each speaker and labels it (up to 8 speakers; 3 or more is experimental). Labels restart in every chunk of a long recording, so Speaker 1 may change between chunks. Limits each request to 30 minutes."
-      )
-      .addToggle((toggle) => {
-        toggle
-          .setValue(settings.speakerDiarization)
-          .setDisabled(smart)
-          .onChange(async (value) => {
-            settings.speakerDiarization = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
+    // Smart mode rejects speaker labels and timestamps outright
+    if (!smart) {
+      new Setting(containerEl)
+        .setName("Speaker labels")
+        .setDesc(
+          "Starts a new paragraph for each speaker and labels it (up to 8 speakers; 3 or more is experimental). Labels restart in every chunk of a long recording, so Speaker 1 may change between chunks. Limits each request to 30 minutes. Turning this on disables custom vocabulary."
+        )
+        .addToggle((toggle) => {
+          toggle
+            .setValue(settings.speakerDiarization)
+            .onChange(async (value) => {
+              settings.speakerDiarization = value;
+              await this.plugin.saveSettings();
+              this.display();
+            });
+        });
 
-    new Setting(containerEl)
-      .setName("Timestamps")
-      .setDesc(
-        (smart ? "Not available in Smart mode. " : "") +
-          "Starts each paragraph with its time in the recording. Limits each request to 30 minutes and may lower overall accuracy."
-      )
-      .addToggle((toggle) => {
-        toggle
-          .setValue(settings.wordTimestamps)
-          .setDisabled(smart)
-          .onChange(async (value) => {
-            settings.wordTimestamps = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
+      new Setting(containerEl)
+        .setName("Timestamps")
+        .setDesc(
+          "Starts each paragraph with its time in the recording. Limits each request to 30 minutes and may lower overall accuracy. Turning this on disables custom vocabulary."
+        )
+        .addToggle((toggle) => {
+          toggle
+            .setValue(settings.wordTimestamps)
+            .onChange(async (value) => {
+              settings.wordTimestamps = value;
+              await this.plugin.saveSettings();
+              this.display();
+            });
+        });
+    }
 
-    new Setting(containerEl)
-      .setName("Custom vocabulary")
-      .setDesc(
-        (vocabularyBlocked
-          ? "Not used while speaker labels or timestamps are on. "
-          : "") +
+    // The API rejects a vocabulary combined with labels or timestamps
+    if (!vocabularyBlocked) {
+      new Setting(containerEl)
+        .setName("Custom vocabulary")
+        .setDesc(
           `Names, product terms and jargon to recognize, one per line. Up to ${MAX_CUSTOM_VOCABULARY_TERMS.toLocaleString()} terms; works best with around 100.`
-      )
-      .addTextArea((text) => {
-        text.inputEl.classList.add("transcription-audio-setting-text-area");
-        text
-          .setPlaceholder("Obsidian\nGemini")
-          .setValue(settings.customVocabulary)
-          .setDisabled(vocabularyBlocked)
-          .onChange(async (value) => {
-            settings.customVocabulary = value;
-            await this.plugin.saveSettings();
-          });
-      });
+        )
+        .addTextArea((text) => {
+          text.inputEl.classList.add("transcription-audio-setting-text-area");
+          text
+            .setPlaceholder("Obsidian\nGemini")
+            .setValue(settings.customVocabulary)
+            .onChange(async (value) => {
+              settings.customVocabulary = value;
+              await this.plugin.saveSettings();
+            });
+        });
+    }
 
     new Setting(containerEl)
       .setName("Language hints")

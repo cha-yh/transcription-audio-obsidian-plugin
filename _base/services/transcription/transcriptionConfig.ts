@@ -14,7 +14,7 @@ export type TranscriptionOptions = Pick<
 /**
  * The options that actually take effect, after the API's own rules:
  * smart mode cannot label speakers or time words, and a custom vocabulary
- * cannot be combined with either. The settings UI greys out what this drops,
+ * cannot be combined with either. The settings UI hides what this drops,
  * so a stored value the user cannot see never reaches a request.
  */
 export function effectiveTranscriptionOptions(options: TranscriptionOptions): {

@@ -43,10 +43,10 @@ General:
 
 Transcription — always done by Google's dedicated speech-to-text model, `gemini-3.5-transcribe`. It does not follow prompts; only these options shape the transcript:
 
-- Mode (default: Verbatim): Verbatim keeps fillers, repetitions and false starts. Smart removes them and tidies punctuation and lists, but cannot be combined with speaker labels or timestamps.
-- Speaker labels (default: off): A labelled paragraph per speaker, up to 8 speakers (3 or more is experimental). Labels restart in every 20-minute chunk of a recording over 30 minutes.
-- Timestamps (default: off): Each paragraph starts with its time in the recording. May lower overall accuracy.
-- Custom vocabulary: Terms to recognize, one per line (up to 1,000; best around 100). Not used while speaker labels or timestamps are on.
+- Mode (default: Verbatim): Verbatim keeps fillers, repetitions and false starts. Smart removes them and tidies punctuation and lists, but cannot be combined with speaker labels or timestamps, so those two options are hidden while Smart is selected.
+- Speaker labels (default: off): A labelled paragraph per speaker, up to 8 speakers (3 or more is experimental). Labels restart in every 20-minute chunk of a recording over 30 minutes. Turning this on disables custom vocabulary.
+- Timestamps (default: off): Each paragraph starts with its time in the recording. May lower overall accuracy. Turning this on disables custom vocabulary.
+- Custom vocabulary: Terms to recognize, one per line (up to 1,000; best around 100). Hidden while speaker labels or timestamps are on, since the API rejects the combination.
 - Language hints: Comma-separated BCP-47 codes such as `ko-KR, en-US`. Leave empty to detect the language automatically.
 - Speaker labels and timestamps limit a request to 30 minutes, and Free Tier keys are limited to 10,000 input tokens per minute (about 7 minutes of audio).
 
