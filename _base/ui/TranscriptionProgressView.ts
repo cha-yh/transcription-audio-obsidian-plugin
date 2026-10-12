@@ -6,6 +6,7 @@ import {
   formatBytes,
   formatDuration,
   formatLocaleDateTime,
+  formatLogDateTime,
   formatTimeRange,
   formatTimestamp,
 } from "../utils/format";
@@ -27,6 +28,13 @@ import {
 import { TERMINAL_STAGES } from "../constants/sessionHistory";
 import type { ProgressHistoryStore } from "../services/session/ProgressHistoryStore";
 import type { AudioPluginSettings } from "../types/setting";
+import {
+  applyRunProgressEvent,
+  createRunProgress,
+  isInFlight,
+  type ChunkPhase,
+  type RunProgress,
+} from "../utils/runProgress";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -40,13 +48,37 @@ function indicatorStatusOf(
 }
 /** Above this many chunks the number labels collide, so they are dropped. */
 const MAX_SPARKLINE_LABELS = 8;
+/** Bars in the placeholder drawn while the audio is still being prepared. */
+const SKELETON_BAR_COUNT = 48;
+/** How often the placeholder bars pick new heights. */
+const SKELETON_SHUFFLE_MS = 1000;
+
+/** A placeholder bar height between 40% and 60%. */
+function skeletonBarHeight(): string {
+  return `${40 + Math.random() * 20}%`;
+}
+
+/**
+ * A chunk failed and the controller can still re-run it. The progress area
+ * holds the only Retry buttons, so it stays open while this holds.
+ */
+function needsRetry(state: {
+  progress?: RunProgress;
+  rerunDisabled?: boolean;
+}): boolean {
+  if (!state.progress || state.rerunDisabled) return false;
+  for (const phase of Array.from(state.progress.chunkPhases.values())) {
+    if (phase === "failed") return true;
+  }
+  return false;
+}
+const SHOW_LOGS_LABEL = "Show logs";
+const HIDE_LOGS_LABEL = "Hide logs";
 
 type SparklineChunk = PersistedSparklineChunk;
 type SparklineData = PersistedSparkline;
 
-interface LogEntry extends RuntimeLogEntry {
-  retryButtonEl?: HTMLButtonElement;
-}
+type LogEntry = RuntimeLogEntry;
 
 /**
  * The DOM half of a session. Kept apart from the state half so that what gets
@@ -59,27 +91,56 @@ interface SessionRefs {
   /** Chunk re-run buttons under the sparkline, refreshed when they go stale. */
   chunkRerunButtonEls: HTMLButtonElement[];
   fileNameEl: HTMLAnchorElement;
-  fileSizeEl: HTMLElement;
-  statusEl: HTMLElement;
   targetFileEl: HTMLAnchorElement;
-  modelEl: HTMLElement;
   categoryRowEl: HTMLElement;
   categoryEl: HTMLElement;
   transcriptRowEl: HTMLElement;
   transcriptFileEl: HTMLAnchorElement;
-  chunkWrapEl?: HTMLElement;
-  chunkBarEl?: HTMLProgressElement;
-  chunkLabelEl?: HTMLElement;
   logEl: HTMLElement;
   latestLogEl: HTMLElement;
   detailButtonEl: HTMLButtonElement;
   cancelButtonEl: HTMLButtonElement;
   logHistoryEl: HTMLElement;
   indicatorEl: HTMLElement;
+  /** The status row; clicking it shows or hides the progress area. */
+  statusBarEl: HTMLElement;
+  progressToggleEl: HTMLElement;
+  /**
+   * Opens when a run starts or a chunk needs a retry; only the user closes
+   * it. Not persisted: a rebuilt panel opens the cards that are running or
+   * waiting for a retry and leaves the rest closed.
+   */
+  isProgressExpanded: boolean;
+  progressEl: HTMLElement;
+  progressChartEl: HTMLElement;
+  /** Chunk-state layer over the chart; rebuilt without touching the bars. */
+  progressOverlayEl?: HTMLElement;
+  progressStatusEl: HTMLElement;
+  /**
+   * Which chart is drawn. The bars are rebuilt only when this changes, so a
+   * chunk update does not restart the skeleton animation.
+   */
+  progressChartKey?: "skeleton" | "chart" | "none";
+  /** Placeholder bars, re-heightened on a timer while they are shown. */
+  skeletonBarEls?: HTMLElement[];
 }
 
+/** How one chunk reads in the progress area. */
+type ChunkView = ChunkPhase | "pending" | "skipped" | "stopped";
+
+const CHUNK_VIEW_TEXT: Record<ChunkView, string> = {
+  pending: "Waiting",
+  starting: "Preparing...",
+  uploading: "Uploading...",
+  transcribing: "Transcribing...",
+  done: "Done",
+  failed: "Failed",
+  skipped: "Skipped, no speech",
+  stopped: "Stopped",
+};
+
 /**
- * Flat on purpose: `session.statusEl` and `session.logHistory` are read in
+ * Flat on purpose: `session.statusText` and `session.logHistory` are read in
  * well over a hundred places, and nesting the state would rename every one of
  * them for no behavioural gain.
  */
@@ -234,6 +295,20 @@ export class TranscriptionProgressView extends ItemView {
     this.store.setSource(source);
 
     this.restoreSessions();
+
+    this.registerInterval(
+      window.setInterval(() => this.shuffleSkeletons(), SKELETON_SHUFFLE_MS)
+    );
+  }
+
+  /** Gives every visible placeholder chart new bar heights. */
+  private shuffleSkeletons(): void {
+    for (const session of this.sessions) {
+      if (!session.isProgressExpanded || !session.skeletonBarEls) continue;
+      for (const bar of session.skeletonBarEls) {
+        bar.style.height = skeletonBarHeight();
+      }
+    }
   }
 
   /**
@@ -338,12 +413,13 @@ export class TranscriptionProgressView extends ItemView {
   ): void {
     const entry: LogEntry = {
       text: detailText,
+      atMs: Date.now(),
       retryChunkIndex: options?.retryChunkIndex,
       sparkline: options?.sparkline,
     };
 
-    // A chunk only ever has one live Retry button: the newest one. Older
-    // entries for the same chunk describe a result that has been superseded.
+    // Only the newest result for a chunk is current; older entries describe
+    // one that has been superseded.
     if (entry.retryChunkIndex !== undefined) {
       for (const previous of session.logHistory) {
         if (previous.retryChunkIndex === entry.retryChunkIndex) {
@@ -360,10 +436,6 @@ export class TranscriptionProgressView extends ItemView {
 
     // Add to log detail area if expanded
     if (session.isLogExpanded) {
-      // Stale buttons live in already-rendered rows, so refresh them in place.
-      if (entry.retryChunkIndex !== undefined) {
-        this.refreshRetryButtons(session);
-      }
       const line = this.renderLogLine(session, entry);
       line.scrollIntoView({ block: "end" });
     }
@@ -376,6 +448,12 @@ export class TranscriptionProgressView extends ItemView {
     const line = session.logHistoryEl.createEl("div", {
       cls: "transcription-audio-log-line",
     });
+    if (entry.atMs !== undefined) {
+      line.createEl("span", {
+        text: formatLogDateTime(new Date(entry.atMs)),
+        cls: "transcription-audio-log-line-time",
+      });
+    }
     line.createEl("span", {
       text: entry.text,
       cls: "transcription-audio-log-line-text",
@@ -389,47 +467,17 @@ export class TranscriptionProgressView extends ItemView {
       this.renderSparkline(session, entry.sparkline);
     }
 
-    if (entry.retryChunkIndex === undefined) {
-      return line;
-    }
-
-    const chunkIndex = entry.retryChunkIndex;
-    const retryBtn = line.createEl("button", {
-      text: "Retry",
-      cls: "transcription-audio-log-retry-button",
-    });
-    entry.retryButtonEl = retryBtn;
-    retryBtn.disabled = Boolean(entry.retryStale) || Boolean(entry.retryRunning);
-    if (entry.retryRunning) {
-      retryBtn.setText("Retrying...");
-    }
-
-    retryBtn.addEventListener("click", () => {
-      entry.retryRunning = true;
-      retryBtn.disabled = true;
-      retryBtn.setText("Retrying...");
-      session.pendingRetryChunks.add(chunkIndex);
-      progressBus.publish({ stage: "chunk-rerun-requested", chunkIndex });
-    });
-
+    // Chunk re-runs are offered in the progress area, not on log lines.
     return line;
   }
 
   /**
-   * Speech-activity bar chart. Drawn as inline SVG scaled by viewBox so it
-   * fits whatever width the sidebar happens to be, with dividers marking
-   * chunk boundaries so a quiet stretch can be tied to a chunk number.
+   * Speech-activity bars with chunk-boundary dividers, as inline SVG scaled by
+   * viewBox so it fits whatever width the sidebar happens to be.
    */
-  private renderSparkline(
-    session: TranscriptionSession,
-    data: SparklineData
-  ): void {
-    const wrap = session.logHistoryEl.createEl("div", {
-      cls: "transcription-audio-sparkline",
-    });
-
+  private createSpeechChartSvg(data: SparklineData): SVGSVGElement {
     const width = 100;
-    const height = 20;
+    const height = 32;
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     svg.setAttribute("preserveAspectRatio", "none");
@@ -440,8 +488,10 @@ export class TranscriptionProgressView extends ItemView {
       const barWidth = width / count;
       data.buckets.forEach((value, index) => {
         const clamped = Math.max(0, Math.min(1, value));
+        // Square root lifts the low ratios sparse speech produces (~10-30%)
+        // into visible bars while keeping 0 and 1 where they were.
         // Keep a 1px stub for empty buckets so the timeline stays readable
-        const barHeight = Math.max(0.75, clamped * height);
+        const barHeight = Math.max(1, Math.sqrt(clamped) * height);
         const rect = document.createElementNS(SVG_NS, "rect");
         rect.setAttribute("x", `${index * barWidth}`);
         rect.setAttribute("y", `${height - barHeight}`);
@@ -455,6 +505,73 @@ export class TranscriptionProgressView extends ItemView {
         svg.appendChild(rect);
       });
     }
+
+    // Divider at every chunk boundary except the very start
+    for (const chunk of data.chunks.slice(1)) {
+      const x = data.totalMs > 0 ? (chunk.startMs / data.totalMs) * width : 0;
+      const divider = document.createElementNS(SVG_NS, "line");
+      divider.setAttribute("x1", `${x}`);
+      divider.setAttribute("x2", `${x}`);
+      divider.setAttribute("y1", "0");
+      divider.setAttribute("y2", `${height}`);
+      divider.addClass("transcription-audio-sparkline-divider");
+      svg.appendChild(divider);
+    }
+
+    return svg;
+  }
+
+  /**
+   * Chunk numbers under the chart, only when they fit; the WAV path can plan
+   * dozens of chunks and the labels would collide into noise.
+   */
+  private renderChunkLabels(wrap: HTMLElement, data: SparklineData): void {
+    if (data.chunks.length === 0 || data.chunks.length > MAX_SPARKLINE_LABELS) {
+      return;
+    }
+    const toPercent = (ms: number) =>
+      data.totalMs > 0 ? (ms / data.totalMs) * 100 : 0;
+    const numbering = this.sentNumbering(data.chunks);
+    const labels = wrap.createEl("div", {
+      cls: "transcription-audio-sparkline-labels",
+    });
+    for (const chunk of data.chunks) {
+      const mid = (toPercent(chunk.startMs) + toPercent(chunk.endMs)) / 2;
+      const label = labels.createEl("span", {
+        text: chunk.skipped
+          ? "skip"
+          : String(numbering.get(chunk.chunkIndex) ?? chunk.chunkIndex),
+        cls: chunk.skipped
+          ? "transcription-audio-sparkline-label-skip"
+          : "transcription-audio-sparkline-label",
+      });
+      label.style.left = `${mid}%`;
+    }
+  }
+
+  private renderTimeScale(wrap: HTMLElement, totalMs: number): void {
+    const scale = wrap.createEl("div", {
+      cls: "transcription-audio-sparkline-scale",
+    });
+    scale.createEl("span", { text: "0:00" });
+    scale.createEl("span", { text: formatTimestamp(totalMs) });
+  }
+
+  /**
+   * The chart as older records stored it, inside a log entry. New runs draw
+   * it in the progress area instead.
+   */
+  private renderSparkline(
+    session: TranscriptionSession,
+    data: SparklineData
+  ): void {
+    const wrap = session.logHistoryEl.createEl("div", {
+      cls: "transcription-audio-sparkline",
+    });
+
+    const width = 100;
+    const height = 32;
+    const svg = this.createSpeechChartSvg(data);
 
     const toX = (ms: number) =>
       data.totalMs > 0 ? (ms / data.totalMs) * width : 0;
@@ -500,47 +617,9 @@ export class TranscriptionProgressView extends ItemView {
       }
     }
 
-    // Divider at every chunk boundary except the very start
-    for (const chunk of data.chunks.slice(1)) {
-      const x = toX(chunk.startMs);
-      const divider = document.createElementNS(SVG_NS, "line");
-      divider.setAttribute("x1", `${x}`);
-      divider.setAttribute("x2", `${x}`);
-      divider.setAttribute("y1", "0");
-      divider.setAttribute("y2", `${height}`);
-      divider.addClass("transcription-audio-sparkline-divider");
-      svg.appendChild(divider);
-    }
-
     wrap.appendChild(svg);
-
-    // Chunk numbers only when they fit; the WAV path can plan dozens of chunks
-    // and the labels would collide into noise.
-    if (data.chunks.length > 0 && data.chunks.length <= MAX_SPARKLINE_LABELS) {
-      const numbering = this.sentNumbering(data.chunks);
-      const labels = wrap.createEl("div", {
-        cls: "transcription-audio-sparkline-labels",
-      });
-      for (const chunk of data.chunks) {
-        const mid = (toX(chunk.startMs) + toX(chunk.endMs)) / 2;
-        const label = labels.createEl("span", {
-          text: chunk.skipped
-            ? "skip"
-            : String(numbering.get(chunk.chunkIndex) ?? chunk.chunkIndex),
-          cls: chunk.skipped
-            ? "transcription-audio-sparkline-label-skip"
-            : "transcription-audio-sparkline-label",
-        });
-        label.style.left = `${mid}%`;
-      }
-    }
-
-    const scale = wrap.createEl("div", {
-      cls: "transcription-audio-sparkline-scale",
-    });
-    scale.createEl("span", { text: "0:00" });
-    scale.createEl("span", { text: formatTimestamp(data.totalMs) });
-
+    this.renderChunkLabels(wrap, data);
+    this.renderTimeScale(wrap, data.totalMs);
     this.renderChunkTimeline(wrap, session, data);
   }
 
@@ -609,7 +688,264 @@ export class TranscriptionProgressView extends ItemView {
     }
   }
 
-  /** Re-applies disabled/label state to buttons already in the DOM. */
+  /** Feeds an event to the current run's progress area and redraws on change. */
+  private updateRunProgress(e: ProgressEvent): void {
+    const session = this.currentSession;
+    if (!session?.progress) return;
+    let changed = applyRunProgressEvent(session.progress, e);
+    // A failed chunk opens the area so its Retry button is in view. Never
+    // closes it: only the user does that.
+    if (
+      (e.stage === "chunk-failed" || e.stage === "chunk-rerun-complete") &&
+      needsRetry(session) &&
+      !session.isProgressExpanded
+    ) {
+      session.isProgressExpanded = true;
+      changed = true;
+    }
+    if (changed) {
+      this.renderProgress(session);
+    }
+  }
+
+  /**
+   * Progress area under the status row. Records written before it existed
+   * have no progress state, so theirs holds only the log.
+   */
+  private renderProgress(session: TranscriptionSession): void {
+    const progress = session.progress;
+    const expanded = session.isProgressExpanded;
+    session.progressEl.style.display = expanded ? "" : "none";
+    session.progressToggleEl.toggleClass("is-expanded", expanded);
+    session.statusBarEl.addClass("is-toggleable");
+    session.statusBarEl.setAttribute("role", "button");
+    session.statusBarEl.setAttribute("tabindex", "0");
+    session.statusBarEl.setAttribute("aria-expanded", String(expanded));
+    session.statusBarEl.title = expanded ? "Hide progress" : "Show progress";
+    if (!progress) return;
+
+    const key = this.progressChartKeyOf(session, progress);
+    if (key !== session.progressChartKey) {
+      session.progressChartKey = key;
+      this.renderProgressChart(session, progress, key);
+    }
+    this.renderProgressStatus(session, progress);
+  }
+
+  private progressChartKeyOf(
+    session: TranscriptionSession,
+    progress: RunProgress
+  ): "skeleton" | "chart" | "none" {
+    if (progress.sparkline) return "chart";
+    // A run that ended without analysis (decode failed, or an existing
+    // transcript was reused) has nothing left to wait for.
+    if (progress.chartUnavailable || session.status !== "running") {
+      return "none";
+    }
+    return "skeleton";
+  }
+
+  private renderProgressChart(
+    session: TranscriptionSession,
+    progress: RunProgress,
+    key: "skeleton" | "chart" | "none"
+  ): void {
+    const el = session.progressChartEl;
+    el.empty();
+    session.progressOverlayEl = undefined;
+    session.skeletonBarEls = undefined;
+
+    if (key === "none") {
+      if (progress.chartUnavailable) {
+        el.createEl("div", {
+          text: "No chart: this audio cannot be decoded here",
+          cls: "transcription-audio-progress-note",
+        });
+      }
+      return;
+    }
+
+    const box = el.createEl("div", {
+      cls: "transcription-audio-progress-chart",
+    });
+
+    if (key === "skeleton") {
+      const bars = box.createEl("div", {
+        cls: "transcription-audio-progress-skeleton",
+      });
+      session.skeletonBarEls = Array.from({ length: SKELETON_BAR_COUNT }, () => {
+        const bar = bars.createEl("div", {
+          cls: "transcription-audio-progress-skeleton-bar",
+        });
+        bar.style.height = skeletonBarHeight();
+        return bar;
+      });
+      return;
+    }
+
+    const data = progress.sparkline!;
+    box.appendChild(this.createSpeechChartSvg(data));
+    session.progressOverlayEl = box.createEl("div", {
+      cls: "transcription-audio-progress-overlays",
+    });
+    this.renderChunkLabels(el, data);
+    this.renderTimeScale(el, data.totalMs);
+  }
+
+  /**
+   * The chunks the area tracks. A whole-file run plans no chunks, so it is
+   * shown as one chunk spanning the recording, numbered 1 like everywhere else.
+   */
+  private progressChunks(progress: RunProgress): SparklineChunk[] {
+    const planned = progress.sparkline?.chunks ?? [];
+    if (planned.length > 0) return planned;
+    const totalMs = progress.sparkline?.totalMs ?? 0;
+    return Array.from(progress.chunkPhases.keys())
+      .sort((a, b) => a - b)
+      .map((chunkIndex) => ({
+        chunkIndex,
+        startMs: 0,
+        endMs: totalMs,
+        speechRatio: 0,
+        skipped: false,
+      }));
+  }
+
+  private chunkViewOf(
+    session: TranscriptionSession,
+    chunk: SparklineChunk,
+    phase: ChunkPhase | undefined
+  ): ChunkView {
+    // A skipped range that was transcribed later is tracked like any other
+    if (phase === undefined) return chunk.skipped ? "skipped" : "pending";
+    // Work in flight when the run ended is not coming back
+    if (isInFlight(phase) && session.status !== "running") return "stopped";
+    return phase;
+  }
+
+  private renderProgressStatus(
+    session: TranscriptionSession,
+    progress: RunProgress
+  ): void {
+    const statusEl = session.progressStatusEl;
+    statusEl.empty();
+    session.progressOverlayEl?.empty();
+
+    const chunks = this.progressChunks(progress);
+    const totalMs = progress.sparkline?.totalMs ?? 0;
+    const toPercent = (ms: number) => (totalMs > 0 ? (ms / totalMs) * 100 : 0);
+    const isWholeFile =
+      chunks.filter((chunk) => !chunk.skipped).length <= 1 &&
+      chunks.length <= 1;
+    const numbering = this.sentNumbering(chunks);
+    const views = chunks.map((chunk) => ({
+      chunk,
+      view: this.chunkViewOf(
+        session,
+        chunk,
+        progress.chunkPhases.get(chunk.chunkIndex)
+      ),
+    }));
+
+    if (views.length > 0) {
+      // Thin per-chunk strip under the chart; spans the full width when the
+      // recording length is unknown.
+      const strip = statusEl.createEl("div", {
+        cls: "transcription-audio-progress-strip",
+      });
+      for (const { chunk, view } of views) {
+        const left = totalMs > 0 ? toPercent(chunk.startMs) : 0;
+        const width = totalMs > 0 ? toPercent(chunk.endMs) - left : 100;
+        const segment = strip.createEl("div", {
+          cls: `transcription-audio-progress-segment transcription-audio-progress-${view}`,
+        });
+        segment.style.left = `${left}%`;
+        segment.style.width = `${Math.max(width, 0.5)}%`;
+
+        if (
+          session.progressOverlayEl &&
+          totalMs > 0 &&
+          view !== "pending" &&
+          view !== "done"
+        ) {
+          const overlay = session.progressOverlayEl.createEl("div", {
+            cls: `transcription-audio-progress-overlay transcription-audio-progress-overlay-${view}`,
+          });
+          overlay.style.left = `${left}%`;
+          overlay.style.width = `${Math.max(width, 0.5)}%`;
+        }
+      }
+
+      // Long plans list only what needs attention; the strip shows the rest
+      const showAll = views.length <= MAX_SPARKLINE_LABELS;
+      const rows = views.filter(
+        ({ view }) => showAll || (view !== "done" && view !== "pending")
+      );
+      if (rows.length > 0) {
+        const list = statusEl.createEl("div", {
+          cls: "transcription-audio-progress-rows",
+        });
+        for (const { chunk, view } of rows) {
+          this.renderProgressRow(list, session, chunk, view, {
+            isWholeFile,
+            number: numbering.get(chunk.chunkIndex),
+          });
+        }
+      }
+    }
+  }
+
+  private renderProgressRow(
+    list: HTMLElement,
+    session: TranscriptionSession,
+    chunk: SparklineChunk,
+    view: ChunkView,
+    options: { isWholeFile: boolean; number?: number }
+  ): void {
+    const row = list.createEl("div", {
+      cls: `transcription-audio-progress-row transcription-audio-progress-row-${view}`,
+    });
+    const label = options.isWholeFile
+      ? "Audio"
+      : `${
+          chunk.skipped && view === "skipped"
+            ? "–"
+            : options.number ?? chunk.chunkIndex
+        } · ${formatTimeRange(chunk.startMs, chunk.endMs)}`;
+    row.createEl("span", {
+      text: label,
+      cls: "transcription-audio-progress-row-label",
+    });
+
+    const state = row.createEl("span", {
+      cls: "transcription-audio-progress-row-state",
+    });
+    state.createEl("span", {
+      cls: "transcription-audio-progress-dot",
+    });
+    state.createEl("span", { text: CHUNK_VIEW_TEXT[view] });
+
+    if (view !== "failed" && view !== "skipped") return;
+
+    const chunkIndex = chunk.chunkIndex;
+    const button = row.createEl("button", {
+      text: view === "failed" ? "Retry" : "Transcribe",
+      cls: "transcription-audio-log-retry-button",
+    });
+    // Dead once the controller has moved on: the rerun context belongs to
+    // whichever run is current, so a click here would rewrite that run's
+    // transcript instead of this one's.
+    button.disabled =
+      Boolean(session.rerunDisabled) ||
+      session.pendingRetryChunks.has(chunkIndex);
+    button.addEventListener("click", () => {
+      if (session.rerunDisabled) return;
+      button.disabled = true;
+      session.pendingRetryChunks.add(chunkIndex);
+      progressBus.publish({ stage: "chunk-rerun-requested", chunkIndex });
+    });
+  }
+
   /** Marks a run as no longer re-runnable and updates every button it owns. */
   private disableReruns(session: TranscriptionSession): void {
     session.rerunDisabled = true;
@@ -617,21 +953,16 @@ export class TranscriptionProgressView extends ItemView {
       if (entry.retryChunkIndex !== undefined) entry.retryStale = true;
     }
     this.refreshRetryButtons(session);
+    this.renderProgress(session);
   }
 
   private refreshRetryButtons(session: TranscriptionSession): void {
     for (const button of session.chunkRerunButtonEls) {
       if (session.rerunDisabled) button.disabled = true;
     }
-    for (const entry of session.logHistory) {
-      const button = entry.retryButtonEl;
-      if (!button) continue;
-      button.disabled = Boolean(entry.retryStale) || Boolean(entry.retryRunning);
-      button.setText(entry.retryRunning ? "Retrying..." : "Retry");
-    }
   }
 
-  /** Clears the "Retrying..." state once a rerun settles. */
+  /** Re-enables a chunk's buttons once its rerun settles. */
   private settleRetryButtons(
     session: TranscriptionSession,
     chunkIndex: number
@@ -643,6 +974,7 @@ export class TranscriptionProgressView extends ItemView {
       }
     }
     this.refreshRetryButtons(session);
+    this.renderProgress(session);
   }
 
   /**
@@ -675,7 +1007,7 @@ export class TranscriptionProgressView extends ItemView {
     });
 
     const row1 = infoEl.createEl("div", { cls: "transcription-audio-row" });
-    row1.createEl("span", { text: "File: ", cls: "transcription-audio-label" });
+    row1.createEl("span", { text: "Audio: ", cls: "transcription-audio-label" });
     const fileNameEl = row1.createEl("a", {
       text: state.audioName ?? "-",
       cls: "internal-link transcription-audio-file-link",
@@ -686,17 +1018,6 @@ export class TranscriptionProgressView extends ItemView {
     } else {
       fileNameEl.classList.add("is-disabled");
     }
-
-    const row2 = infoEl.createEl("div", { cls: "transcription-audio-row" });
-    row2.createEl("span", { text: "Size: ", cls: "transcription-audio-label" });
-    const fileSizeEl = row2.createEl("span", { text: state.fileSizeText });
-
-    const row3 = infoEl.createEl("div", { cls: "transcription-audio-row" });
-    row3.createEl("span", {
-      text: "Status: ",
-      cls: "transcription-audio-label",
-    });
-    const statusEl = row3.createEl("span", { text: state.statusText });
 
     const row4 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row4.createEl("span", {
@@ -717,13 +1038,6 @@ export class TranscriptionProgressView extends ItemView {
     } else {
       targetFileEl.classList.add("is-disabled");
     }
-
-    const row5 = infoEl.createEl("div", { cls: "transcription-audio-row" });
-    row5.createEl("span", {
-      text: "Model: ",
-      cls: "transcription-audio-label",
-    });
-    const modelEl = row5.createEl("span", { text: state.modelText });
 
     const row6 = infoEl.createEl("div", { cls: "transcription-audio-row" });
     row6.createEl("span", {
@@ -764,17 +1078,33 @@ export class TranscriptionProgressView extends ItemView {
       text: state.latestLogText,
       cls: "transcription-audio-latest-log-text",
     });
-    const detailButtonEl = statusBarEl.createEl("button", {
-      text: state.isLogExpanded ? "close" : "detail",
-      cls: "transcription-audio-detail-button",
+    const progressToggleEl = statusBarEl.createEl("span", {
+      cls: "transcription-audio-progress-toggle",
     });
+    progressToggleEl.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
     const cancelButtonEl = statusBarEl.createEl("button", {
       text: state.cancelLabel,
       cls: "transcription-audio-cancel-button",
     });
     cancelButtonEl.disabled = !state.isCancellable;
 
-    const logHistoryEl = logEl.createEl("div", {
+    // Under the status row and folded with it: chart, chunk state, then the
+    // log as the detail beneath them
+    const progressEl = logEl.createEl("div", {
+      cls: "transcription-audio-progress",
+    });
+    const progressChartEl = progressEl.createEl("div");
+    const progressStatusEl = progressEl.createEl("div");
+
+    const logsBarEl = progressEl.createEl("div", {
+      cls: "transcription-audio-progress-logs",
+    });
+    const detailButtonEl = logsBarEl.createEl("button", {
+      text: state.isLogExpanded ? HIDE_LOGS_LABEL : SHOW_LOGS_LABEL,
+      cls: "transcription-audio-detail-button",
+    });
+
+    const logHistoryEl = progressEl.createEl("div", {
       cls: "transcription-audio-log-history",
     });
     logHistoryEl.style.display = state.isLogExpanded ? "block" : "none";
@@ -784,10 +1114,7 @@ export class TranscriptionProgressView extends ItemView {
       closeButtonEl,
       chunkRerunButtonEls: [],
       fileNameEl,
-      fileSizeEl,
-      statusEl,
       targetFileEl,
-      modelEl,
       categoryRowEl: row6,
       categoryEl,
       transcriptRowEl: row7,
@@ -798,12 +1125,16 @@ export class TranscriptionProgressView extends ItemView {
       cancelButtonEl,
       logHistoryEl,
       indicatorEl,
+      statusBarEl,
+      progressToggleEl,
+      isProgressExpanded: state.status === "running" || needsRetry(state),
+      progressEl,
+      progressChartEl,
+      progressStatusEl,
     }) as TranscriptionSession;
 
     this.updateIndicator(session, indicatorStatusOf(state.status));
-    if (state.chunkLabelText !== undefined) {
-      this.ensureChunkUi(session);
-    }
+    this.renderProgress(session);
     if (state.isLogExpanded) {
       this.renderLogHistory(session);
     }
@@ -814,6 +1145,22 @@ export class TranscriptionProgressView extends ItemView {
   private attachSessionHandlers(session: TranscriptionSession): void {
     session.detailButtonEl.addEventListener("click", () => {
       this.toggleLogHistory(session);
+    });
+
+    const toggleProgress = () => {
+      session.isProgressExpanded = !session.isProgressExpanded;
+      this.renderProgress(session);
+    };
+    session.statusBarEl.addEventListener("click", (event) => {
+      // The cancel button sits in the same row
+      if ((event.target as HTMLElement).closest("button")) return;
+      toggleProgress();
+    });
+    session.statusBarEl.addEventListener("keydown", (event) => {
+      if (event.target !== session.statusBarEl) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggleProgress();
     });
 
     session.closeButtonEl.addEventListener("click", () => {
@@ -857,21 +1204,6 @@ export class TranscriptionProgressView extends ItemView {
     });
   }
 
-  /** Chunk progress only appears once a run reports its first chunk. */
-  private ensureChunkUi(session: TranscriptionSession): void {
-    if (session.chunkWrapEl) return;
-
-    session.chunkWrapEl = session.sessionEl.createEl("div", {
-      cls: "transcription-audio-chunks",
-    });
-    session.chunkLabelEl = session.chunkWrapEl.createEl("div", {
-      text: session.chunkLabelText ?? "Chunk: -",
-    });
-    session.chunkBarEl = session.chunkWrapEl.createEl("progress");
-    session.chunkBarEl.max = session.chunkBarMax;
-    session.chunkBarEl.value = session.chunkBarValue;
-  }
-
   private createNewSession(): TranscriptionSession {
     if (this.currentSession) {
       // The controller keeps retry context for the most recent run only, so
@@ -907,7 +1239,7 @@ export class TranscriptionProgressView extends ItemView {
     session.logHistory.forEach((entry) => {
       this.renderLogLine(session, entry);
     });
-    session.detailButtonEl.setText("close");
+    session.detailButtonEl.setText(HIDE_LOGS_LABEL);
   }
 
   private toggleLogHistory(session: TranscriptionSession): void {
@@ -918,7 +1250,7 @@ export class TranscriptionProgressView extends ItemView {
     } else {
       // Collapse: hide history
       session.logHistoryEl.style.display = "none";
-      session.detailButtonEl.setText("detail");
+      session.detailButtonEl.setText(SHOW_LOGS_LABEL);
     }
   }
 
@@ -976,10 +1308,12 @@ export class TranscriptionProgressView extends ItemView {
    * Every one of these writes the state field beside the DOM node. Skipping
    * the state half is how a value ends up visible but unsaved, which is the
    * bug this whole feature exists to fix.
+   *
+   * Status, size, model and chunk progress are no longer drawn on the card,
+   * but they stay in the saved record so older records still load unchanged.
    */
   private setStatus(session: TranscriptionSession, text: string): void {
     session.statusText = text;
-    session.statusEl.setText(text);
   }
 
   private setLatestLog(session: TranscriptionSession, text: string): void {
@@ -989,12 +1323,10 @@ export class TranscriptionProgressView extends ItemView {
 
   private setFileSize(session: TranscriptionSession, bytes: number): void {
     session.fileSizeText = formatBytes(bytes);
-    session.fileSizeEl.setText(session.fileSizeText);
   }
 
   private setModel(session: TranscriptionSession, model: string): void {
     session.modelText = model;
-    session.modelEl.setText(model);
   }
 
   private setCategory(session: TranscriptionSession, category: string): void {
@@ -1047,12 +1379,6 @@ export class TranscriptionProgressView extends ItemView {
     session.chunkBarMax = max;
     session.chunkBarValue = value;
     session.chunkLabelText = labelText;
-    this.ensureChunkUi(session);
-    if (session.chunkBarEl) {
-      session.chunkBarEl.max = max;
-      session.chunkBarEl.value = value;
-    }
-    session.chunkLabelEl?.setText(labelText);
   }
 
   private setCancelState(
@@ -1080,6 +1406,7 @@ export class TranscriptionProgressView extends ItemView {
     this.setCancelState(session, false, cancelLabel);
     this.updateIndicator(session, indicatorStatusOf(status));
     session.closeButtonEl.hidden = !isRemovableStatus(status);
+    this.renderProgress(session);
   }
 
   private removeSession(session: TranscriptionSession): void {
@@ -1188,6 +1515,7 @@ export class TranscriptionProgressView extends ItemView {
 
   private onProgress(e: ProgressEvent): void {
     this.handleProgress(e);
+    this.updateRunProgress(e);
 
     // A finished run is worth writing at once; anything else can wait for the
     // debounce, since a run emits events far faster than a file should be
@@ -1286,13 +1614,8 @@ export class TranscriptionProgressView extends ItemView {
               } silent range(s) skipped (${formatTimestamp(skippedMs)})`
             : `Speech analysed — ${sentCount} chunk(s) to transcribe`;
 
-        this.pushLog(summary, detail, this.currentSession, {
-          sparkline: {
-            buckets: e.buckets,
-            totalMs: e.totalMs,
-            chunks: e.chunks,
-          },
-        });
+        // The chart itself is drawn in the progress area, not in the log.
+        this.pushLog(summary, detail, this.currentSession);
 
         break;
       }
@@ -1543,6 +1866,10 @@ export class TranscriptionProgressView extends ItemView {
           break;
         }
         this.setStatus(this.currentSession, "Transcribing");
+        if (!this.currentSession.progress) {
+          this.currentSession.progress = createRunProgress();
+          this.renderProgress(this.currentSession);
+        }
         this.pushLog(
           "Step 1: Transcription started",
           "Step 1: Transcribing audio to raw text",
@@ -1715,7 +2042,7 @@ export class TranscriptionProgressView extends ItemView {
         this.setStatus(this.currentSession, "Failed");
         // Show short summary in status bar, full message in log detail
         this.pushLog(
-          "API request failed - click detail for more",
+          "API request failed - show logs for more",
           `Failed: ${e.message}`,
           this.currentSession
         );

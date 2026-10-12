@@ -1,6 +1,5 @@
 import {
   App,
-  Editor,
   MarkdownView,
   Modal,
   Notice,
@@ -9,7 +8,11 @@ import {
   SecretComponent,
   Setting,
 } from "obsidian";
-import { TranscriptionController } from "./controllers/TranscriptionController";
+import {
+  TranscriptionController,
+  type TranscriptionSource,
+} from "./controllers/TranscriptionController";
+import { isAudioFileExtension } from "_base/constants/regex";
 import { getProgressViewType } from "./_base/constants/progress";
 import { TranscriptionProgressView } from "./_base/ui/TranscriptionProgressView";
 import { AudioPluginSettings, TranscriptionCategory } from "_base/types/setting";
@@ -84,11 +87,15 @@ export default class TranscriptionAudioPlugin extends Plugin {
         )
     );
 
+    // Same id as when it was editor-only, so existing hotkeys still apply
     this.addCommand({
       id: "transcription-audio",
       name: "Transcribe audio",
-      editorCallback: (editor: Editor, view: MarkdownView) => {
-        this.commandGenerateTranscript(editor);
+      checkCallback: (checking) => {
+        const source = this.findTranscriptionSource();
+        if (!source) return false;
+        if (!checking) void this.commandGenerateTranscript(source);
+        return true;
       },
     });
 
@@ -182,7 +189,23 @@ export default class TranscriptionAudioPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  async commandGenerateTranscript(editor: Editor) {
+  /**
+   * A note open for editing transcribes the audio linked before the cursor;
+   * an open audio file transcribes itself.
+   */
+  private findTranscriptionSource(): TranscriptionSource | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (view && view.getMode() === "source") {
+      return { kind: "note", editor: view.editor };
+    }
+    const file = this.app.workspace.getActiveFile();
+    if (file && isAudioFileExtension(file.extension)) {
+      return { kind: "audio", file };
+    }
+    return null;
+  }
+
+  async commandGenerateTranscript(source: TranscriptionSource) {
     const apiKey =
       this.settings.secretApiKeyName && canUseSecretStorage(this.app)
         ? this.app.secretStorage?.getSecret(this.settings.secretApiKeyName) ??
@@ -193,7 +216,7 @@ export default class TranscriptionAudioPlugin extends Plugin {
       new Notice(SECRET_STORAGE_VERSION_MESSAGE);
     }
 
-    await this.transcriptionController.run(editor, {
+    await this.transcriptionController.run(source, {
       apiKey,
       prompt: this.settings.prompt || DEFAULT_BASIC_MODE_PROMPT,
       model: this.settings.model,
@@ -545,9 +568,10 @@ class TranscriptionSettingTab extends PluginSettingTab {
   }
 
   /**
-   * The options of the dedicated transcription model. Each one the API cannot
-   * combine with another is greyed out instead of hidden, with the reason in
-   * its description, so the user can see why it has no effect.
+   * The options of the dedicated transcription model. An option the API
+   * cannot combine with the current choice is hidden rather than greyed out,
+   * and the option that rules it out says so in its description.
+   * `effectiveTranscriptionOptions` drops the same values from the request.
    */
   private displayTranscriptionSettings(containerEl: HTMLElement): void {
     const settings = this.plugin.settings;
@@ -585,59 +609,57 @@ class TranscriptionSettingTab extends PluginSettingTab {
         });
       });
 
-    new Setting(containerEl)
-      .setName("Speaker labels")
-      .setDesc(
-        (smart ? "Not available in Smart mode. " : "") +
-          "Starts a new paragraph for each speaker and labels it (up to 8 speakers; 3 or more is experimental). Labels restart in every chunk of a long recording, so Speaker 1 may change between chunks. Limits each request to 30 minutes."
-      )
-      .addToggle((toggle) => {
-        toggle
-          .setValue(settings.speakerDiarization)
-          .setDisabled(smart)
-          .onChange(async (value) => {
-            settings.speakerDiarization = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
+    // Smart mode rejects speaker labels and timestamps outright
+    if (!smart) {
+      new Setting(containerEl)
+        .setName("Speaker labels")
+        .setDesc(
+          "Starts a new paragraph for each speaker and labels it (up to 8 speakers; 3 or more is experimental). Labels restart in every chunk of a long recording, so Speaker 1 may change between chunks. Limits each request to 30 minutes. Turning this on disables custom vocabulary."
+        )
+        .addToggle((toggle) => {
+          toggle
+            .setValue(settings.speakerDiarization)
+            .onChange(async (value) => {
+              settings.speakerDiarization = value;
+              await this.plugin.saveSettings();
+              this.display();
+            });
+        });
 
-    new Setting(containerEl)
-      .setName("Timestamps")
-      .setDesc(
-        (smart ? "Not available in Smart mode. " : "") +
-          "Starts each paragraph with its time in the recording. Limits each request to 30 minutes and may lower overall accuracy."
-      )
-      .addToggle((toggle) => {
-        toggle
-          .setValue(settings.wordTimestamps)
-          .setDisabled(smart)
-          .onChange(async (value) => {
-            settings.wordTimestamps = value;
-            await this.plugin.saveSettings();
-            this.display();
-          });
-      });
+      new Setting(containerEl)
+        .setName("Timestamps")
+        .setDesc(
+          "Starts each paragraph with its time in the recording. Limits each request to 30 minutes and may lower overall accuracy. Turning this on disables custom vocabulary."
+        )
+        .addToggle((toggle) => {
+          toggle
+            .setValue(settings.wordTimestamps)
+            .onChange(async (value) => {
+              settings.wordTimestamps = value;
+              await this.plugin.saveSettings();
+              this.display();
+            });
+        });
+    }
 
-    new Setting(containerEl)
-      .setName("Custom vocabulary")
-      .setDesc(
-        (vocabularyBlocked
-          ? "Not used while speaker labels or timestamps are on. "
-          : "") +
+    // The API rejects a vocabulary combined with labels or timestamps
+    if (!vocabularyBlocked) {
+      new Setting(containerEl)
+        .setName("Custom vocabulary")
+        .setDesc(
           `Names, product terms and jargon to recognize, one per line. Up to ${MAX_CUSTOM_VOCABULARY_TERMS.toLocaleString()} terms; works best with around 100.`
-      )
-      .addTextArea((text) => {
-        text.inputEl.classList.add("transcription-audio-setting-text-area");
-        text
-          .setPlaceholder("Obsidian\nGemini")
-          .setValue(settings.customVocabulary)
-          .setDisabled(vocabularyBlocked)
-          .onChange(async (value) => {
-            settings.customVocabulary = value;
-            await this.plugin.saveSettings();
-          });
-      });
+        )
+        .addTextArea((text) => {
+          text.inputEl.classList.add("transcription-audio-setting-text-area");
+          text
+            .setPlaceholder("Obsidian\nGemini")
+            .setValue(settings.customVocabulary)
+            .onChange(async (value) => {
+              settings.customVocabulary = value;
+              await this.plugin.saveSettings();
+            });
+        });
+    }
 
     new Setting(containerEl)
       .setName("Language hints")

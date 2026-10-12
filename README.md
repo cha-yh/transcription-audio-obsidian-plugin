@@ -43,10 +43,10 @@ General:
 
 Transcription — always done by Google's dedicated speech-to-text model, `gemini-3.5-transcribe`. It does not follow prompts; only these options shape the transcript:
 
-- Mode (default: Verbatim): Verbatim keeps fillers, repetitions and false starts. Smart removes them and tidies punctuation and lists, but cannot be combined with speaker labels or timestamps.
-- Speaker labels (default: off): A labelled paragraph per speaker, up to 8 speakers (3 or more is experimental). Labels restart in every 20-minute chunk of a recording over 30 minutes.
-- Timestamps (default: off): Each paragraph starts with its time in the recording. May lower overall accuracy.
-- Custom vocabulary: Terms to recognize, one per line (up to 1,000; best around 100). Not used while speaker labels or timestamps are on.
+- Mode (default: Verbatim): Verbatim keeps fillers, repetitions and false starts. Smart removes them and tidies punctuation and lists, but cannot be combined with speaker labels or timestamps, so those two options are hidden while Smart is selected.
+- Speaker labels (default: off): A labelled paragraph per speaker, up to 8 speakers (3 or more is experimental). Labels restart in every 20-minute chunk of a recording over 30 minutes. Turning this on disables custom vocabulary.
+- Timestamps (default: off): Each paragraph starts with its time in the recording. May lower overall accuracy. Turning this on disables custom vocabulary.
+- Custom vocabulary: Terms to recognize, one per line (up to 1,000; best around 100). Hidden while speaker labels or timestamps are on, since the API rejects the combination.
 - Language hints: Comma-separated BCP-47 codes such as `ko-KR, en-US`. Leave empty to detect the language automatically.
 - Speaker labels and timestamps limit a request to 30 minutes, and Free Tier keys are limited to 10,000 input tokens per minute (about 7 minutes of audio).
 
@@ -74,6 +74,8 @@ Run history:
 4. A progress panel will automatically open in the right sidebar, showing real-time status updates including file upload progress, API request status, and transcription progress.
    <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
 5. When complete, a link to the transcript file is inserted at your starting cursor position, followed by the summary when `Summarize transcript` is on.
+
+You can also open the audio file itself (mp3, mp4, mpeg, mpga, m4a, wav, webm) and run "Transcribe audio" from the command palette. With no note to write into, this only creates the transcript file next to the audio; the summary step is skipped even when `Summarize transcript` is on.
 
 To bring the panel back later, run the command "Open progress panel". It reveals the panel in the right sidebar and restores the saved run history.
 

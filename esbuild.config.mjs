@@ -9,6 +9,12 @@ import os from "os";
 const env = process.argv[2] || "production";
 const prod = env === "production";
 const useTestManifest = process.argv.includes("--test-manifest");
+/**
+ * One-off build into the vault: production output, but still copied using the
+ * vault path from .env.local. Kept behind a flag so a plain release build never
+ * touches the vault.
+ */
+const deploy = process.argv.includes("--deploy");
 
 function readManifest() {
   const manifestPath = path.join(process.cwd(), "manifest.json");
@@ -34,6 +40,15 @@ function buildTargetManifest(sourceManifest) {
 
 if (prod) {
   dotenv.config({ path: ".env.production" });
+  if (deploy && fs.existsSync(".env.local")) {
+    dotenv.config({ path: ".env.local" });
+  }
+  if (deploy && !process.env.OBSIDIAN_PLUGINS_PATH) {
+    console.error(
+      "--deploy needs OBSIDIAN_PLUGINS_PATH (set it in .env.local)."
+    );
+    process.exit(1);
+  }
 } else {
   if (fs.existsSync(".env.local")) {
     dotenv.config({ path: ".env.local" });

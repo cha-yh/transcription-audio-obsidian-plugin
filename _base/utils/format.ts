@@ -49,6 +49,25 @@ export function formatLocaleDateTime(date: Date): string {
   }
 }
 
+/**
+ * Compact date and time for a log line, in the reader's locale, e.g.
+ * "10/08 17:20:31". Same fallback as `formatLocaleDateTime`.
+ */
+export function formatLogDateTime(date: Date): string {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
 /** Chunk range as "start-end (length)", e.g. "19:58-39:58 (20:00)". */
 export function formatTimeRange(startMs: number, endMs: number): string {
   const lengthMs = Math.max(0, endMs - startMs);
