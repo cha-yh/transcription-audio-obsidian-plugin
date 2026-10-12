@@ -75,6 +75,8 @@ Run history:
    <img alt="Image" src="https://github.com/user-attachments/assets/80010ac4-7473-4811-86d8-c84dc7fa05eb" />
 5. When complete, a link to the transcript file is inserted at your starting cursor position, followed by the summary when `Summarize transcript` is on.
 
+You can also open the audio file itself (mp3, mp4, mpeg, mpga, m4a, wav, webm) and run "Transcribe audio" from the command palette. With no note to write into, this only creates the transcript file next to the audio; the summary step is skipped even when `Summarize transcript` is on.
+
 To bring the panel back later, run the command "Open progress panel". It reveals the panel in the right sidebar and restores the saved run history.
 
 ## Privacy & Data

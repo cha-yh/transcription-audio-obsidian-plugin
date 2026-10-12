@@ -1,6 +1,5 @@
 import {
   App,
-  Editor,
   MarkdownView,
   Modal,
   Notice,
@@ -9,7 +8,11 @@ import {
   SecretComponent,
   Setting,
 } from "obsidian";
-import { TranscriptionController } from "./controllers/TranscriptionController";
+import {
+  TranscriptionController,
+  type TranscriptionSource,
+} from "./controllers/TranscriptionController";
+import { isAudioFileExtension } from "_base/constants/regex";
 import { getProgressViewType } from "./_base/constants/progress";
 import { TranscriptionProgressView } from "./_base/ui/TranscriptionProgressView";
 import { AudioPluginSettings, TranscriptionCategory } from "_base/types/setting";
@@ -84,11 +87,15 @@ export default class TranscriptionAudioPlugin extends Plugin {
         )
     );
 
+    // Same id as when it was editor-only, so existing hotkeys still apply
     this.addCommand({
       id: "transcription-audio",
       name: "Transcribe audio",
-      editorCallback: (editor: Editor, view: MarkdownView) => {
-        this.commandGenerateTranscript(editor);
+      checkCallback: (checking) => {
+        const source = this.findTranscriptionSource();
+        if (!source) return false;
+        if (!checking) void this.commandGenerateTranscript(source);
+        return true;
       },
     });
 
@@ -182,7 +189,23 @@ export default class TranscriptionAudioPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  async commandGenerateTranscript(editor: Editor) {
+  /**
+   * A note open for editing transcribes the audio linked before the cursor;
+   * an open audio file transcribes itself.
+   */
+  private findTranscriptionSource(): TranscriptionSource | null {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (view && view.getMode() === "source") {
+      return { kind: "note", editor: view.editor };
+    }
+    const file = this.app.workspace.getActiveFile();
+    if (file && isAudioFileExtension(file.extension)) {
+      return { kind: "audio", file };
+    }
+    return null;
+  }
+
+  async commandGenerateTranscript(source: TranscriptionSource) {
     const apiKey =
       this.settings.secretApiKeyName && canUseSecretStorage(this.app)
         ? this.app.secretStorage?.getSecret(this.settings.secretApiKeyName) ??
@@ -193,7 +216,7 @@ export default class TranscriptionAudioPlugin extends Plugin {
       new Notice(SECRET_STORAGE_VERSION_MESSAGE);
     }
 
-    await this.transcriptionController.run(editor, {
+    await this.transcriptionController.run(source, {
       apiKey,
       prompt: this.settings.prompt || DEFAULT_BASIC_MODE_PROMPT,
       model: this.settings.model,

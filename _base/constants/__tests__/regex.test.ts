@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { AUDIO_FILE_REGEX } from "../regex";
+import { AUDIO_FILE_REGEX, isAudioFileExtension } from "../regex";
 
 function matchAudio(text: string): string[] {
   const matches: string[] = [];
@@ -55,5 +55,19 @@ describe("AUDIO_FILE_REGEX", () => {
     expect(matchAudio("[my audio file](recording.webm)")).toContain(
       "recording.webm"
     );
+  });
+});
+
+describe("isAudioFileExtension", () => {
+  it("accepts every format the link pattern accepts, in any case", () => {
+    expect(isAudioFileExtension("m4a")).toBe(true);
+    expect(isAudioFileExtension("WAV")).toBe(true);
+    expect(isAudioFileExtension("webm")).toBe(true);
+  });
+
+  it("rejects notes and other files", () => {
+    expect(isAudioFileExtension("md")).toBe(false);
+    expect(isAudioFileExtension("pdf")).toBe(false);
+    expect(isAudioFileExtension("")).toBe(false);
   });
 });

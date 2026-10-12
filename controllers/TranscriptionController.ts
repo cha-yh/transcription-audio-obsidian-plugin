@@ -143,6 +143,15 @@ function readFrontmatterCategory(content: string): string | undefined {
 }
 
 /** Everything a single transcription run needs from the plugin's settings. */
+/**
+ * Where a run starts. From a note, the audio is the last link before the
+ * cursor and the result goes in at the cursor. From the audio file itself
+ * there is no note to write into, so only the transcript file is produced.
+ */
+export type TranscriptionSource =
+  | { kind: "note"; editor: Editor }
+  | { kind: "audio"; file: TFile };
+
 export interface TranscriptionRunOptions {
   apiKey: string | undefined;
   prompt: string;
@@ -305,7 +314,10 @@ export class TranscriptionController {
     });
   }
 
-  async run(editor: Editor, options: TranscriptionRunOptions): Promise<void> {
+  async run(
+    source: TranscriptionSource,
+    options: TranscriptionRunOptions
+  ): Promise<void> {
     const {
       apiKey,
       prompt,
@@ -316,23 +328,39 @@ export class TranscriptionController {
       enableCategoryClassification,
       categories,
     } = options;
-    const currentCursorPosition = editor.getCursor();
-    const activeFile = this.app.workspace.getActiveFile();
+    let filePath: string;
+    let target: { path: string; line: number; ch: number } | null = null;
+    if (source.kind === "audio") {
+      filePath = source.file.path;
+    } else {
+      const { editor } = source;
+      const currentCursorPosition = editor.getCursor();
+      const activeFile = this.app.workspace.getActiveFile();
 
-    if (activeFile == null) {
-      new Notice("No active file found");
-      return;
+      if (activeFile == null) {
+        new Notice("No active file found");
+        return;
+      }
+
+      const textInRange = editor.getRange(
+        { line: 0, ch: 0 },
+        currentCursorPosition
+      );
+
+      filePath = this.obsidianFileService.findFilePath(
+        textInRange,
+        AUDIO_FILE_REGEX
+      );
+      target = {
+        path: activeFile.path,
+        line: currentCursorPosition.line,
+        ch: currentCursorPosition.ch,
+      };
     }
 
-    const textInRange = editor.getRange(
-      { line: 0, ch: 0 },
-      currentCursorPosition
-    );
-
-    const filePath = this.obsidianFileService.findFilePath(
-      textInRange,
-      AUDIO_FILE_REGEX
-    );
+    // A summary needs a note to land in; without one the transcript file is
+    // the whole result.
+    const summarize = summarizeTranscript && target !== null;
 
     const fileType = filePath.split(".").pop();
 
@@ -399,17 +427,19 @@ export class TranscriptionController {
         stage: "model-selected",
         // The summary model only matters when a summary is made.
         model:
-          summarizeTranscript && transcriptionModel !== model
+          summarize && transcriptionModel !== model
             ? `${transcriptionModel} → ${model}`
             : transcriptionModel,
       });
 
-      progressBus.publish({
-        stage: "target-file-selected",
-        path: activeFile.path,
-        line: currentCursorPosition.line,
-        ch: currentCursorPosition.ch,
-      });
+      if (target) {
+        progressBus.publish({
+          stage: "target-file-selected",
+          path: target.path,
+          line: target.line,
+          ch: target.ch,
+        });
+      }
 
       progressBus.publish({ stage: "file-detected", fileName: filePath });
       const file = this.app.vault.getAbstractFileByPath(filePath);
@@ -859,7 +889,7 @@ export class TranscriptionController {
           // two requests to invent one.
           const transcriptForModel = stripChunkMarkers(rawTranscript);
           let transcript: string;
-          if (!summarizeTranscript || transcriptForModel.length === 0) {
+          if (!summarize || transcriptForModel.length === 0) {
             transcript = transcriptionLink;
           } else {
             // Step 2: Classify transcript into a category when enabled
@@ -929,12 +959,14 @@ export class TranscriptionController {
 
           throwIfCancelled();
 
-          await this.obsidianInteractor.appendTextToFile(
-            activeFile.path,
-            currentCursorPosition.line,
-            currentCursorPosition.ch,
-            transcript
-          );
+          if (target) {
+            await this.obsidianInteractor.appendTextToFile(
+              target.path,
+              target.line,
+              target.ch,
+              transcript
+            );
+          }
 
           // A run whose transcription produced nothing is not a success, even
           // though the transcript file and its link were still written. Also
